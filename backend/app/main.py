@@ -5,11 +5,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import traces, evaluations
 from app.db.postgres import engine
+from app.websocket import manager
 
 
 @asynccontextmanager
@@ -56,3 +57,17 @@ async def root() -> dict[str, str]:
         "version": "0.1.0",
         "docs": "/docs",
     }
+
+
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    """WebSocket endpoint for real-time trace streaming."""
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive and handle incoming messages
+            data = await websocket.receive_text()
+            # Echo back or handle specific commands
+            await manager.send_personal(websocket, {"type": "pong", "data": data})
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket)

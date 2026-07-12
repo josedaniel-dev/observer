@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.models.trace import Trace, Span
+from app.websocket import manager
 
 router = APIRouter()
 
@@ -121,6 +122,18 @@ async def create_trace(
         session.add(span)
 
     await session.flush()
+
+    # Broadcast new trace via WebSocket
+    await manager.broadcast({
+        "type": "new_trace",
+        "data": {
+            "id": str(trace.id),
+            "name": trace.name,
+            "status": trace.status,
+            "created_at": trace.created_at.isoformat() if trace.created_at else None,
+        },
+    })
+
     return trace
 
 
