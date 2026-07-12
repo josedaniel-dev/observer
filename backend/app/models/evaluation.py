@@ -1,12 +1,12 @@
-"""Evaluation model."""
+"""Evaluation model - compatible with both PostgreSQL and SQLite."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Numeric, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import JSON
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -21,24 +21,24 @@ class Evaluation(Base):
 
     __tablename__ = "evaluations"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     trace_id = Column(
-        UUID(as_uuid=True),
+        String(36),
         ForeignKey("traces.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     span_id = Column(
-        UUID(as_uuid=True),
+        String(36),
         ForeignKey("spans.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
     evaluator_type = Column(
-        Enum("llm_judge", "rule_based", "human", name="evaluator_type"),
+        String(20),
         nullable=False,
     )
     score = Column(Numeric(5, 4), nullable=True)
-    criteria = Column(JSONB, nullable=True)
-    result = Column(JSONB, nullable=True)
+    criteria = Column(JSON, nullable=True)
+    result = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

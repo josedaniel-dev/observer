@@ -1,13 +1,15 @@
-"""Trace and Span models."""
+"""Trace and Span models - compatible with both PostgreSQL and SQLite."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+# Use JSON type that works with both PostgreSQL and SQLite
+from sqlalchemy import JSON
 
 
 class Base(DeclarativeBase):
@@ -21,17 +23,13 @@ class Trace(Base):
 
     __tablename__ = "traces"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
-    session_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    session_id = Column(String(36), nullable=True, index=True)
     start_time = Column(DateTime(timezone=True), nullable=False)
     end_time = Column(DateTime(timezone=True), nullable=True)
-    status = Column(
-        Enum("ok", "error", "unset", name="trace_status"),
-        nullable=False,
-        default="unset",
-    )
-    metadata_ = Column("metadata", JSONB, nullable=True)
+    status = Column(String(20), nullable=False, default="unset")
+    metadata_ = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     # Relationships
@@ -43,27 +41,23 @@ class Span(Base):
 
     __tablename__ = "spans"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     trace_id = Column(
-        UUID(as_uuid=True), ForeignKey("traces.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36), ForeignKey("traces.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    parent_span_id = Column(UUID(as_uuid=True), ForeignKey("spans.id"), nullable=True, index=True)
+    parent_span_id = Column(String(36), ForeignKey("spans.id"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     span_type = Column(String(50), nullable=False, default="generic")
     start_time = Column(DateTime(timezone=True), nullable=False)
     end_time = Column(DateTime(timezone=True), nullable=True)
-    status = Column(
-        Enum("ok", "error", "unset", name="span_status"),
-        nullable=False,
-        default="unset",
-    )
-    input_ = Column("input", JSONB, nullable=True)
-    output_ = Column("output", JSONB, nullable=True)
+    status = Column(String(20), nullable=False, default="unset")
+    input_ = Column("input", JSON, nullable=True)
+    output_ = Column("output", JSON, nullable=True)
     tokens_input = Column(Integer, nullable=True)
     tokens_output = Column(Integer, nullable=True)
     cost_usd = Column(Numeric(10, 6), nullable=True)
-    metadata_ = Column("metadata", JSONB, nullable=True)
-    attributes = Column(JSONB, nullable=True)
+    metadata_ = Column("metadata", JSON, nullable=True)
+    attributes = Column(JSON, nullable=True)
 
     # Relationships
     trace = relationship("Trace", back_populates="spans")
