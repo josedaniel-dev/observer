@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 
 ```bash
 # Start PostgreSQL
-docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=observatory postgres:16
+podman run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=observatory postgres:16
 
 # Run migrations
 alembic upgrade head

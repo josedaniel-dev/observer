@@ -54,8 +54,8 @@ build/
 .env.local
 .env.*.local
 
-# Docker
-docker-compose.override.yml
+# Podman
+podman-compose.override.yml
 
 # Database
 *.db

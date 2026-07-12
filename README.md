@@ -12,10 +12,10 @@ Open-source observability and telemetry platform for analyzing and grading LLMs.
 
 ## Quick Start
 
-### Using Docker Compose
+### Using Podman Compose
 
 ```bash
-docker-compose up -d
+podman-compose up -d
 ```
 
 ### Manual Setup
@@ -23,7 +23,7 @@ docker-compose up -d
 1. Start PostgreSQL:
 
 ```bash
-docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=observatory postgres:16
+podman run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=observatory postgres:16
 ```
 
 2. Install and run the backend:

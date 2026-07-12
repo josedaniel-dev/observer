@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,7 +19,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      containerfile: Containerfile
     container_name: llm-observatory-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/observatory
@@ -36,7 +34,7 @@ services:
   dashboard:
     build:
       context: ./dashboard
-      dockerfile: Dockerfile
+      containerfile: Containerfile
     container_name: llm-observatory-dashboard
     ports:
       - "5173:5173"
