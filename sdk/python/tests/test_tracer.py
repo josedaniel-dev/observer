@@ -1,7 +1,9 @@
 """Tests for the tracer module."""
 
 import pytest
+import asyncio
 from llm_observatory.tracer import Tracer, Span, SpanStatus, TokenUsage, trace
+from llm_observatory.pricing import calculate_cost, get_model_pricing, MODEL_PRICING
 
 
 class TestSpan:
@@ -34,6 +36,18 @@ class TestSpan:
         span = Span(name="test_span")
         span.set_attribute("model", "gpt-4")
         assert span.attributes["model"] == "gpt-4"
+
+    def test_span_set_input(self):
+        """Test setting span input."""
+        span = Span(name="test_span")
+        span.set_input({"prompt": "hello"})
+        assert span.input == {"prompt": "hello"}
+
+    def test_span_set_output(self):
+        """Test setting span output."""
+        span = Span(name="test_span")
+        span.set_output({"response": "world"})
+        assert span.output == {"response": "world"}
 
     def test_span_set_token_usage(self):
         """Test setting token usage."""
@@ -103,7 +117,7 @@ class TestTraceDecorator:
     """Tests for trace decorator."""
 
     def test_trace_decorator(self):
-        """Test trace decorator."""
+        """Test trace decorator with sync function."""
         @trace(name="test_function")
         def test_function():
             return 42
@@ -119,3 +133,56 @@ class TestTraceDecorator:
 
         with pytest.raises(ValueError):
             failing_function()
+
+    def test_trace_decorator_async(self):
+        """Test trace decorator with async function."""
+        @trace(name="async_function")
+        async def async_function():
+            await asyncio.sleep(0.01)
+            return 42
+
+        result = asyncio.run(async_function())
+        assert result == 42
+
+    def test_trace_decorator_async_with_error(self):
+        """Test trace decorator with async error."""
+        @trace(name="async_failing")
+        async def async_failing():
+            await asyncio.sleep(0.01)
+            raise ValueError("async error")
+
+        with pytest.raises(ValueError):
+            asyncio.run(async_failing())
+
+
+class TestPricing:
+    """Tests for pricing module."""
+
+    def test_known_model_pricing(self):
+        """Test pricing for known model."""
+        pricing = get_model_pricing("gpt-4o")
+        assert pricing is not None
+        assert pricing.input_per_1m == 2.50
+        assert pricing.output_per_1m == 10.00
+
+    def test_unknown_model_pricing(self):
+        """Test pricing for unknown model."""
+        pricing = get_model_pricing("unknown-model")
+        assert pricing is None
+
+    def test_calculate_cost(self):
+        """Test cost calculation."""
+        cost = calculate_cost("gpt-4o", input_tokens=1000, output_tokens=500)
+        # 1000/1M * 2.50 + 500/1M * 10.00 = 0.0025 + 0.005 = 0.0075
+        assert cost == pytest.approx(0.0075, rel=1e-6)
+
+    def test_calculate_cost_unknown_model(self):
+        """Test cost calculation for unknown model."""
+        cost = calculate_cost("unknown", input_tokens=1000, output_tokens=500)
+        assert cost is None
+
+    def test_all_models_have_pricing(self):
+        """Test that all models in pricing table have valid data."""
+        for model, pricing in MODEL_PRICING.items():
+            assert pricing.input_per_1m >= 0, f"{model} has negative input price"
+            assert pricing.output_per_1m >= 0, f"{model} has negative output price"

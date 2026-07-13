@@ -5,69 +5,134 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from llm_observatory.tracer import SpanStatus, get_tracer
+from llm_observatory.pricing import calculate_cost
+from llm_observatory.tracer import Span, SpanStatus, get_tracer
 
 
 class OpenAIInstrumentor:
     """Instruments OpenAI API calls to capture traces."""
 
     def __init__(self) -> None:
-        self._original_create: Optional[Any] = None
+        self._original_sync_create: Optional[Any] = None
+        self._original_async_create: Optional[Any] = None
 
     def instrument(self) -> None:
         """Patch OpenAI to capture traces."""
         try:
             import openai
 
-            self._original_create = openai.resources.chat.completions.Completions.create
-            openai.resources.chat.completions.Completions.create = self._patched_create
+            # Patch sync completions
+            self._original_sync_create = (
+                openai.resources.chat.completions.Completions.create
+            )
+            openai.resources.chat.completions.Completions.create = self._patched_sync_create
+
+            # Patch async completions
+            self._original_async_create = (
+                openai.resources.chat.completions.AsyncCompletions.create
+            )
+            openai.resources.chat.completions.AsyncCompletions.create = (
+                self._patched_async_create
+            )
         except ImportError:
             pass
 
-    def _patched_create(self, *args: Any, **kwargs: Any) -> Any:
-        """Patched create method that captures traces."""
+    def _build_span(
+        self, model: str, messages: list[dict[str, Any]]
+    ) -> tuple[Span, Any]:
+        """Build a span for an OpenAI call."""
         tracer = get_tracer()
-        model = kwargs.get("model", "unknown")
-        messages = kwargs.get("messages", [])
-
         span = tracer.start_span(
-            name=f"openai.chat.completions.create",
+            name="openai.chat.completions.create",
             span_type="llm",
-            input={"model": model, "messages": messages},
         )
+        span.set_input({"model": model, "messages": messages})
+        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.request.model", model)
+        return span, tracer
 
-        start_time = time.time()
-
+    def _finish_span(self, span: Span, result: Any, model: str) -> None:
+        """Extract data from result and finish span."""
         try:
-            result = self._original_create(*args, **kwargs)
-
             # Extract token usage
             if hasattr(result, "usage") and result.usage:
-                span.set_token_usage(
-                    input_tokens=result.usage.prompt_tokens or 0,
-                    output_tokens=result.usage.completion_tokens or 0,
-                )
+                input_tokens = getattr(result.usage, "prompt_tokens", 0) or 0
+                output_tokens = getattr(result.usage, "completion_tokens", 0) or 0
+                span.set_token_usage(input_tokens, output_tokens)
 
-            span.set_attribute("model", model)
+                # Calculate cost
+                cost = calculate_cost(model, input_tokens, output_tokens)
+                if cost is not None:
+                    span.set_cost(cost)
+
+            # Extract output
+            if hasattr(result, "choices") and result.choices:
+                choice = result.choices[0]
+                if hasattr(choice, "message"):
+                    message = choice.message
+                    output = {}
+                    if hasattr(message, "content"):
+                        output["content"] = message.content
+                    if hasattr(message, "role"):
+                        output["role"] = message.role
+                    span.set_output(output)
+
             span.set_attribute("response_id", getattr(result, "id", None))
             span.set_status(SpanStatus.OK)
-
-            return result
 
         except Exception as e:
             span.set_status(SpanStatus.ERROR)
             span.set_attribute("error.message", str(e))
-            raise
 
         finally:
             span.end()
 
+    def _patched_sync_create(self, *args: Any, **kwargs: Any) -> Any:
+        """Patched sync create method."""
+        model = kwargs.get("model", "unknown")
+        messages = kwargs.get("messages", [])
+
+        span, _ = self._build_span(model, messages)
+
+        try:
+            result = self._original_sync_create(*args, **kwargs)
+            self._finish_span(span, result, model)
+            return result
+        except Exception as e:
+            span.set_status(SpanStatus.ERROR)
+            span.set_attribute("error.message", str(e))
+            span.end()
+            raise
+
+    async def _patched_async_create(self, *args: Any, **kwargs: Any) -> Any:
+        """Patched async create method."""
+        model = kwargs.get("model", "unknown")
+        messages = kwargs.get("messages", [])
+
+        span, _ = self._build_span(model, messages)
+
+        try:
+            result = await self._original_async_create(*args, **kwargs)
+            self._finish_span(span, result, model)
+            return result
+        except Exception as e:
+            span.set_status(SpanStatus.ERROR)
+            span.set_attribute("error.message", str(e))
+            span.end()
+            raise
+
     def uninstrument(self) -> None:
         """Remove instrumentation."""
-        if self._original_create is not None:
-            try:
-                import openai
+        try:
+            import openai
 
-                openai.resources.chat.completions.Completions.create = self._original_create
-            except ImportError:
-                pass
+            if self._original_sync_create is not None:
+                openai.resources.chat.completions.Completions.create = (
+                    self._original_sync_create
+                )
+            if self._original_async_create is not None:
+                openai.resources.chat.completions.AsyncCompletions.create = (
+                    self._original_async_create
+                )
+        except ImportError:
+            pass

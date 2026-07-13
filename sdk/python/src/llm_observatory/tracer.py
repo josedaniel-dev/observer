@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
+import inspect
 import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 # Context variable for current span
 _current_span: ContextVar[Optional[Span]] = ContextVar("current_span", default=None)
@@ -61,6 +64,14 @@ class Span:
     def set_attribute(self, key: str, value: Any) -> None:
         """Set a span attribute."""
         self.attributes[key] = value
+
+    def set_input(self, data: dict[str, Any]) -> None:
+        """Set the span input."""
+        self.input = data
+
+    def set_output(self, data: dict[str, Any]) -> None:
+        """Set the span output."""
+        self.output = data
 
     def set_token_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Set token usage for this span."""
@@ -193,7 +204,7 @@ def trace(
     name: Optional[str] = None,
     span_type: str = "function",
 ) -> Callable:
-    """Decorator to trace a function.
+    """Decorator to trace a function (sync or async).
 
     Args:
         name: Name for the trace (defaults to function name).
@@ -204,29 +215,50 @@ def trace(
     """
 
     def decorator(func: Callable) -> Callable:
-        import functools
+        span_name = name or func.__name__
 
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            span_name = name or func.__name__
-            tracer = _get_global_tracer()
+        if asyncio.iscoroutinefunction(func):
+            # Async version
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                tracer = _get_global_tracer()
+                span = tracer.start_span(span_name, span_type=span_type)
+                token = _current_span.set(span)
 
-            span = tracer.start_span(span_name, span_type=span_type)
-            token = _current_span.set(span)
+                try:
+                    result = await func(*args, **kwargs)
+                    span.set_status(SpanStatus.OK)
+                    return result
+                except Exception as e:
+                    span.set_status(SpanStatus.ERROR)
+                    span.set_attribute("error.message", str(e))
+                    raise
+                finally:
+                    span.end()
+                    _current_span.reset(token)
 
-            try:
-                result = func(*args, **kwargs)
-                span.set_status(SpanStatus.OK)
-                return result
-            except Exception as e:
-                span.set_status(SpanStatus.ERROR)
-                span.set_attribute("error.message", str(e))
-                raise
-            finally:
-                span.end()
-                _current_span.reset(token)
+            return async_wrapper
+        else:
+            # Sync version
+            @functools.wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                tracer = _get_global_tracer()
+                span = tracer.start_span(span_name, span_type=span_type)
+                token = _current_span.set(span)
 
-        return wrapper
+                try:
+                    result = func(*args, **kwargs)
+                    span.set_status(SpanStatus.OK)
+                    return result
+                except Exception as e:
+                    span.set_status(SpanStatus.ERROR)
+                    span.set_attribute("error.message", str(e))
+                    raise
+                finally:
+                    span.end()
+                    _current_span.reset(token)
+
+            return sync_wrapper
 
     return decorator
 

@@ -3,6 +3,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 
 export type SpanStatus = "ok" | "error" | "unset";
 
@@ -27,6 +28,13 @@ export interface Span {
   costUsd?: number;
   metadata: Record<string, unknown>;
   attributes: Record<string, unknown>;
+}
+
+// Context propagation using AsyncLocalStorage
+const spanStorage = new AsyncLocalStorage<Span>();
+
+export function getCurrentSpan(): Span | undefined {
+  return spanStorage.getStore();
 }
 
 export class Tracer {
@@ -68,10 +76,11 @@ export class Tracer {
       attributes?: Record<string, unknown>;
     } = {}
   ): Span {
+    const parentSpan = options.parent || getCurrentSpan();
     const span: Span = {
       id: randomUUID(),
-      traceId: options.parent?.traceId || randomUUID(),
-      parentId: options.parent?.id,
+      traceId: parentSpan?.traceId || randomUUID(),
+      parentId: parentSpan?.id,
       name,
       spanType: options.spanType || "generic",
       startTime: Date.now() / 1000,
@@ -121,6 +130,10 @@ export function setTracer(tracer: Tracer): void {
   globalTracer = tracer;
 }
 
+/**
+ * Synchronous trace decorator.
+ * For async functions, use asyncTrace instead.
+ */
 export function trace<T>(
   name: string,
   fn: (span: Span) => T,
@@ -131,6 +144,31 @@ export function trace<T>(
 
   try {
     const result = fn(span);
+    span.status = "ok";
+    return result;
+  } catch (error) {
+    span.status = "error";
+    span.attributes["error.message"] =
+      error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    span.endTime = Date.now() / 1000;
+  }
+}
+
+/**
+ * Async trace decorator with context propagation.
+ */
+export async function asyncTrace<T>(
+  name: string,
+  fn: (span: Span) => Promise<T>,
+  options: { spanType?: string } = {}
+): Promise<T> {
+  const tracer = getTracer();
+  const span = tracer.startSpan(name, { spanType: options.spanType });
+
+  try {
+    const result = await spanStorage.run(span, () => fn(span));
     span.status = "ok";
     return result;
   } catch (error) {

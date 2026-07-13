@@ -7,13 +7,8 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String
 from sqlalchemy import JSON
-from sqlalchemy.orm import DeclarativeBase
 
-
-class Base(DeclarativeBase):
-    """Base class for all models."""
-
-    pass
+from app.models import Base
 
 
 class Evaluation(Base):

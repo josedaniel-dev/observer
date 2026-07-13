@@ -6,16 +6,10 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.orm import DeclarativeBase, relationship
-
-# Use JSON type that works with both PostgreSQL and SQLite
 from sqlalchemy import JSON
+from sqlalchemy.orm import relationship
 
-
-class Base(DeclarativeBase):
-    """Base class for all models."""
-
-    pass
+from app.models import Base
 
 
 class Trace(Base):
