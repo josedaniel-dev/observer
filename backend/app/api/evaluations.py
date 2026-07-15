@@ -199,6 +199,8 @@ async def run_evaluation(
 async def list_evaluations(
     trace_id: Optional[str] = Query(None),
     evaluator_type: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None, ge=0, le=1),
+    max_score: Optional[float] = Query(None, ge=0, le=1),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -211,6 +213,12 @@ async def list_evaluations(
 
     if evaluator_type:
         base_query = base_query.where(Evaluation.evaluator_type == evaluator_type)
+
+    if min_score is not None:
+        base_query = base_query.where(Evaluation.score >= min_score)
+
+    if max_score is not None:
+        base_query = base_query.where(Evaluation.score <= max_score)
 
     # Get total count
     count_query = select(func.count()).select_from(base_query.subquery())

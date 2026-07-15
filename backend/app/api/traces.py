@@ -6,14 +6,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
+from slowapi import Limiter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.models.trace import Trace, Span
+from app.ratelimit import limiter
 from app.websocket import manager
 
 router = APIRouter()
@@ -219,7 +221,9 @@ async def create_trace(
 
 
 @router.post("/batch", response_model=list[TraceResponse])
+@limiter.limit("10/minute")
 async def create_traces_batch(
+    request: Request,
     batch_data: BatchSpansCreate,
     session: AsyncSession = Depends(get_session),
 ) -> list[Trace]:
@@ -395,3 +399,103 @@ async def delete_trace(
     await session.delete(trace)
     await session.flush()
     return {"detail": "Trace deleted"}
+
+
+# ── Import ────────────────────────────────────────────────────────────
+
+
+class ImportSpanData(BaseModel):
+    """Span data for import."""
+
+    name: str
+    span_type: str = "generic"
+    start_time: float
+    end_time: Optional[float] = None
+    status: str = "ok"
+    input: Optional[dict] = None
+    output: Optional[dict] = None
+    tokens_input: Optional[int] = None
+    tokens_output: Optional[int] = None
+    cost_usd: Optional[float] = None
+    metadata: Optional[dict] = None
+    attributes: Optional[dict] = None
+
+
+class ImportTraceData(BaseModel):
+    """Trace data for import."""
+
+    name: str
+    session_id: Optional[str] = None
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    status: str = "ok"
+    metadata: Optional[dict] = None
+    spans: list[ImportSpanData] = []
+
+
+class ImportRequest(BaseModel):
+    """Request body for trace import."""
+
+    traces: list[ImportTraceData]
+
+
+class ImportResponse(BaseModel):
+    """Response for trace import."""
+
+    imported: int
+    trace_ids: list[str]
+
+
+@router.post("/import", response_model=ImportResponse)
+@limiter.limit("10/minute")
+async def import_traces(
+    request: Request,
+    import_data: ImportRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Import traces from a JSON export.
+
+    Used for migrating data between observatory instances or restoring from backup.
+    """
+    trace_ids = []
+
+    for trace_data in import_data.traces:
+        start_dt = datetime.fromtimestamp(trace_data.start_time, tz=timezone.utc) if trace_data.start_time else datetime.now(timezone.utc)
+        end_dt = datetime.fromtimestamp(trace_data.end_time, tz=timezone.utc) if trace_data.end_time else None
+
+        trace = Trace(
+            id=str(uuid.uuid4()),
+            name=trace_data.name,
+            session_id=trace_data.session_id,
+            start_time=start_dt,
+            end_time=end_dt,
+            status=trace_data.status,
+            metadata=trace_data.metadata,
+        )
+        session.add(trace)
+        await session.flush()
+
+        for span_data in trace_data.spans:
+            span_start = datetime.fromtimestamp(span_data.start_time, tz=timezone.utc)
+            span_end = datetime.fromtimestamp(span_data.end_time, tz=timezone.utc) if span_data.end_time else None
+            span = Span(
+                id=str(uuid.uuid4()),
+                trace_id=trace.id,
+                name=span_data.name,
+                span_type=span_data.span_type,
+                start_time=span_start,
+                end_time=span_end,
+                status=span_data.status,
+                inp=span_data.input,
+                out=span_data.output,
+                tokens_input=span_data.tokens_input,
+                tokens_output=span_data.tokens_output,
+                cost_usd=span_data.cost_usd,
+                meta=span_data.metadata,
+                attributes=span_data.attributes,
+            )
+            session.add(span)
+
+        trace_ids.append(str(trace.id))
+
+    return {"imported": len(import_data.traces), "trace_ids": trace_ids}

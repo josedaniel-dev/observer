@@ -6,21 +6,22 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.api import traces, evaluations, analytics
 from app.auth import require_api_key
 from app.db.postgres import engine
+from app.ratelimit import limiter
 from app.websocket import manager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
-    # Startup
     yield
-    # Shutdown
     await engine.dispose()
 
 
@@ -30,6 +31,22 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Rate limiter
+app.state.limiter = limiter
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Rate limit exceeded",
+            "retry_after": exc.detail,
+        },
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
 
 # CORS middleware - configurable via CORS_ORIGINS env var (comma-separated)
 _cors_origins = os.getenv(
@@ -73,9 +90,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
-            # Echo back or handle specific commands
             await manager.send_personal(websocket, {"type": "pong", "data": data})
     except WebSocketDisconnect:
         await manager.disconnect(websocket)

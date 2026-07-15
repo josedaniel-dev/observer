@@ -628,3 +628,105 @@ async def test_auth_root_endpoint_unaffected(client):
         assert response.status_code == 200
     finally:
         auth_mod.API_KEY = old_key
+
+
+# ── Import Tests ─────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_import_traces(client):
+    """Test importing traces from JSON."""
+    import_payload = {
+        "traces": [
+            {
+                "name": "imported-trace",
+                "status": "ok",
+                "start_time": 1700000000.0,
+                "metadata": {"source": "migration"},
+                "spans": [
+                    {
+                        "name": "imported-span",
+                        "span_type": "llm",
+                        "start_time": 1700000000.0,
+                        "end_time": 1700000001.0,
+                        "status": "ok",
+                        "tokens_input": 50,
+                        "tokens_output": 25,
+                        "cost_usd": 0.0005,
+                    }
+                ],
+            }
+        ]
+    }
+
+    response = await client.post("/v1/traces/import", json=import_payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["imported"] == 1
+    assert len(data["trace_ids"]) == 1
+
+    # Verify imported trace is queryable
+    trace_id = data["trace_ids"][0]
+    get_response = await client.get(f"/v1/traces/{trace_id}")
+    assert get_response.status_code == 200
+    assert get_response.json()["name"] == "imported-trace"
+
+    # Verify spans are queryable
+    spans_response = await client.get(f"/v1/traces/{trace_id}/spans")
+    assert spans_response.status_code == 200
+    spans = spans_response.json()
+    assert len(spans) == 1
+    assert spans[0]["name"] == "imported-span"
+    assert spans[0]["tokens_input"] == 50
+
+
+@pytest.mark.anyio
+async def test_import_traces_empty(client):
+    """Test importing with no traces."""
+    response = await client.post("/v1/traces/import", json={"traces": []})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["imported"] == 0
+    assert data["trace_ids"] == []
+
+
+# ── Evaluation Score Filter Tests ────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_list_evaluations_score_filter(client):
+    """Test filtering evaluations by score range."""
+    create_response = await client.post("/v1/traces/", json={
+        "name": "test-trace",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    trace_id = create_response.json()["id"]
+
+    # Create evaluations with different scores
+    for score in [0.3, 0.5, 0.7, 0.9]:
+        await client.post("/v1/evaluations/", json={
+            "trace_id": trace_id,
+            "evaluator_type": "rule_based",
+            "score": score,
+        })
+
+    # Filter: min_score=0.6
+    response = await client.get("/v1/evaluations/?min_score=0.6")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert all(e["score"] >= 0.6 for e in data["evaluations"])
+
+    # Filter: max_score=0.4
+    response = await client.get("/v1/evaluations/?max_score=0.4")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["evaluations"][0]["score"] <= 0.4
+
+    # Filter: min=0.4, max=0.8
+    response = await client.get("/v1/evaluations/?min_score=0.4&max_score=0.8")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
