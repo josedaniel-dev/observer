@@ -132,8 +132,9 @@ async def test_list_traces(client):
     response = await client.get("/v1/traces/")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) >= 1
-    assert data[0]["name"] == "test-trace"
+    assert len(data["traces"]) >= 1
+    assert data["traces"][0]["name"] == "test-trace"
+    assert data["total"] >= 1
 
 
 @pytest.mark.anyio
@@ -154,7 +155,7 @@ async def test_list_traces_with_status_filter(client):
     response = await client.get("/v1/traces/?status=ok")
     assert response.status_code == 200
     data = response.json()
-    assert all(t["status"] == "ok" for t in data)
+    assert all(t["status"] == "ok" for t in data["traces"])
 
 
 @pytest.mark.anyio
@@ -283,7 +284,8 @@ async def test_list_evaluations(client):
     response = await client.get("/v1/evaluations/")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) >= 1
+    assert len(data["evaluations"]) >= 1
+    assert data["total"] >= 1
 
 
 @pytest.mark.anyio
@@ -475,3 +477,154 @@ async def test_sdk_batch_export_contract(client):
     assert spans_data[0]["tokens_input"] == 10
     assert spans_data[0]["tokens_output"] == 5
     assert float(spans_data[0]["cost_usd"]) == 0.0001
+
+
+# ── Search & Pagination Tests ────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_list_traces_with_search(client):
+    """Test listing traces with server-side name search."""
+    await client.post("/v1/traces/", json={
+        "name": "production-chat",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    await client.post("/v1/traces/", json={
+        "name": "dev-summarize",
+        "start_time": 1700000001.0,
+        "status": "ok",
+    })
+
+    response = await client.get("/v1/traces/?search=chat")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["traces"][0]["name"] == "production-chat"
+
+
+@pytest.mark.anyio
+async def test_list_traces_pagination(client):
+    """Test pagination info in list traces response."""
+    for i in range(5):
+        await client.post("/v1/traces/", json={
+            "name": f"trace-{i}",
+            "start_time": 1700000000.0 + i,
+            "status": "ok",
+        })
+
+    response = await client.get("/v1/traces/?limit=2&offset=0")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 5
+    assert data["limit"] == 2
+    assert data["offset"] == 0
+    assert len(data["traces"]) == 2
+    assert data["traces"][0]["name"] == "trace-4"  # Descending order
+
+
+@pytest.mark.anyio
+async def test_list_evaluations_pagination(client):
+    """Test pagination info in list evaluations response."""
+    create_response = await client.post("/v1/traces/", json={
+        "name": "test-trace",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    trace_id = create_response.json()["id"]
+
+    for _ in range(3):
+        await client.post("/v1/evaluations/", json={
+            "trace_id": trace_id,
+            "evaluator_type": "rule_based",
+            "score": 0.8,
+        })
+
+    response = await client.get("/v1/evaluations/?limit=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 3
+    assert data["limit"] == 2
+    assert len(data["evaluations"]) == 2
+
+
+# ── Authentication Tests ────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_auth_disabled_allows_all(client):
+    """Test that when API key is not set, all requests are allowed."""
+    # Auth is disabled in test env (no OBSERVATORY_API_KEY set)
+    response = await client.get("/v1/traces/")
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_auth_enabled_blocks_without_key(client):
+    """Test that when API key is set, requests without key are blocked."""
+    import app.auth as auth_mod
+    old_key = auth_mod.API_KEY
+    auth_mod.API_KEY = "test-secret-key"
+    try:
+        response = await client.get("/v1/traces/")
+        assert response.status_code == 401
+    finally:
+        auth_mod.API_KEY = old_key
+
+
+@pytest.mark.anyio
+async def test_auth_enabled_allows_valid_key(client):
+    """Test that when API key is set, requests with valid key are allowed."""
+    import app.auth as auth_mod
+    old_key = auth_mod.API_KEY
+    auth_mod.API_KEY = "test-secret-key"
+    try:
+        response = await client.get(
+            "/v1/traces/",
+            headers={"Authorization": "Bearer test-secret-key"},
+        )
+        assert response.status_code == 200
+    finally:
+        auth_mod.API_KEY = old_key
+
+
+@pytest.mark.anyio
+async def test_auth_enabled_rejects_wrong_key(client):
+    """Test that when API key is set, requests with wrong key are rejected."""
+    import app.auth as auth_mod
+    old_key = auth_mod.API_KEY
+    auth_mod.API_KEY = "test-secret-key"
+    try:
+        response = await client.get(
+            "/v1/traces/",
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert response.status_code == 403
+    finally:
+        auth_mod.API_KEY = old_key
+
+
+@pytest.mark.anyio
+async def test_auth_health_endpoint_unaffected(client):
+    """Test that /health endpoint is not affected by auth."""
+    import app.auth as auth_mod
+    old_key = auth_mod.API_KEY
+    auth_mod.API_KEY = "test-secret-key"
+    try:
+        response = await client.get("/health")
+        assert response.status_code == 200
+    finally:
+        auth_mod.API_KEY = old_key
+
+
+@pytest.mark.anyio
+async def test_auth_root_endpoint_unaffected(client):
+    """Test that / root endpoint is not affected by auth."""
+    import app.auth as auth_mod
+    old_key = auth_mod.API_KEY
+    auth_mod.API_KEY = "test-secret-key"
+    try:
+        response = await client.get("/")
+        assert response.status_code == 200
+    finally:
+        auth_mod.API_KEY = old_key

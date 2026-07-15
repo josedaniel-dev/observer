@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
@@ -18,6 +18,15 @@ from app.evaluators import create_evaluator, EvaluatorType, EvaluationCriteria
 from app.websocket import manager
 
 router = APIRouter()
+
+
+class EvaluationListResponse(BaseModel):
+    """Paginated evaluation list response."""
+
+    evaluations: list[EvaluationResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class EvaluationCreate(BaseModel):
@@ -186,26 +195,38 @@ async def run_evaluation(
     return evaluation
 
 
-@router.get("/", response_model=list[EvaluationResponse])
+@router.get("/", response_model=EvaluationListResponse)
 async def list_evaluations(
     trace_id: Optional[str] = Query(None),
     evaluator_type: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
-) -> list[Evaluation]:
+) -> dict:
     """List evaluations with optional filtering."""
-    query = select(Evaluation).order_by(Evaluation.created_at.desc())
+    base_query = select(Evaluation)
 
     if trace_id:
-        query = query.where(Evaluation.trace_id == trace_id)
+        base_query = base_query.where(Evaluation.trace_id == trace_id)
 
     if evaluator_type:
-        query = query.where(Evaluation.evaluator_type == evaluator_type)
+        base_query = base_query.where(Evaluation.evaluator_type == evaluator_type)
 
-    query = query.limit(limit).offset(offset)
-    result = await session.execute(query)
-    return list(result.scalars().all())
+    # Get total count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await session.execute(count_query)).scalar() or 0
+
+    # Get paginated results
+    data_query = base_query.order_by(Evaluation.created_at.desc()).limit(limit).offset(offset)
+    result = await session.execute(data_query)
+    evaluations = list(result.scalars().all())
+
+    return {
+        "evaluations": evaluations,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{evaluation_id}", response_model=EvaluationResponse)

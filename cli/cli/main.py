@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
@@ -13,9 +14,12 @@ console = Console()
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="llm-observatory")
-def cli() -> None:
+@click.option("--api-key", envvar="OBSERVATORY_API_KEY", default=None, help="API key for backend authentication")
+@click.pass_context
+def cli(ctx: click.Context, api_key: str | None) -> None:
     """LLM Observatory CLI - Open-source LLM observability."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["api_key"] = api_key
 
 
 # ── Local Database Commands ──────────────────────────────────────────
@@ -220,7 +224,9 @@ def serve(host: str, port: int, reload: bool, db: str) -> None:
 )
 @click.option("--criteria", help="Comma-separated criteria for evaluation")
 @click.option("--endpoint", default="http://localhost:8000", help="API endpoint")
+@click.pass_context
 def evaluate(
+    ctx: click.Context,
     trace_id: str,
     evaluator: str,
     criteria: str | None,
@@ -233,6 +239,11 @@ def evaluate(
 
     criteria_list = criteria.split(",") if criteria else []
 
+    headers: dict[str, str] = {}
+    api_key = ctx.obj.get("api_key")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     try:
         response = httpx.post(
             f"{endpoint}/v1/evaluations/run",
@@ -241,6 +252,7 @@ def evaluate(
                 "evaluator_type": evaluator,
                 "criteria": [{"name": c.strip(), "description": c.strip()} for c in criteria_list] if criteria_list else [],
             },
+            headers=headers,
         )
         response.raise_for_status()
 
@@ -308,12 +320,18 @@ def export(db: str, output_format: str, output: str | None, status: str | None, 
 
 @cli.command()
 @click.option("--endpoint", default="http://localhost:8000", help="API endpoint")
-def status(endpoint: str) -> None:
+@click.pass_context
+def status(ctx: click.Context, endpoint: str) -> None:
     """Check the status of the observatory server."""
     import httpx
 
+    headers: dict[str, str] = {}
+    api_key = ctx.obj.get("api_key")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     try:
-        response = httpx.get(f"{endpoint}/health")
+        response = httpx.get(f"{endpoint}/health", headers=headers)
         response.raise_for_status()
 
         console.print("[green]Server is healthy![/green]")

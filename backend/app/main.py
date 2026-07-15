@@ -6,10 +6,11 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import traces, evaluations, analytics
+from app.auth import require_api_key
 from app.db.postgres import engine
 from app.websocket import manager
 
@@ -43,10 +44,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(traces.router, prefix="/v1/traces", tags=["traces"])
-app.include_router(evaluations.router, prefix="/v1/evaluations", tags=["evaluations"])
-app.include_router(analytics.router, prefix="/v1/analytics", tags=["analytics"])
+# Include routers with authentication
+_app_auth = Depends(require_api_key)
+app.include_router(traces.router, prefix="/v1/traces", tags=["traces"], dependencies=[_app_auth])
+app.include_router(evaluations.router, prefix="/v1/evaluations", tags=["evaluations"], dependencies=[_app_auth])
+app.include_router(analytics.router, prefix="/v1/analytics", tags=["analytics"], dependencies=[_app_auth])
 
 
 @app.get("/health")

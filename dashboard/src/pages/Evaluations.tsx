@@ -22,7 +22,7 @@ function Evaluations() {
         const response = await fetch('/api/v1/evaluations?limit=100');
         if (!response.ok) throw new Error('Failed to fetch evaluations');
         const data = await response.json();
-        setEvaluations(data);
+        setEvaluations(data.evaluations);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {

@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -107,6 +107,15 @@ class TraceResponse(BaseModel):
                 "created_at": values.created_at,
             }
         return values
+
+
+class TraceListResponse(BaseModel):
+    """Paginated trace list response."""
+
+    traces: list[TraceResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class SpanResponse(BaseModel):
@@ -287,28 +296,44 @@ async def create_traces_batch(
     return created_traces
 
 
-@router.get("/", response_model=list[TraceResponse])
+@router.get("/", response_model=TraceListResponse)
 async def list_traces(
     session_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
-) -> list[Trace]:
-    """List traces with optional filtering."""
-    query = select(Trace).order_by(Trace.created_at.desc())
+) -> dict:
+    """List traces with optional filtering and server-side search."""
+    base_query = select(Trace)
 
     if session_id:
         valid_sid = _safe_uuid(session_id)
         if valid_sid:
-            query = query.where(Trace.session_id == valid_sid)
+            base_query = base_query.where(Trace.session_id == valid_sid)
 
     if status:
-        query = query.where(Trace.status == status)
+        base_query = base_query.where(Trace.status == status)
 
-    query = query.limit(limit).offset(offset)
-    result = await session.execute(query)
-    return list(result.scalars().all())
+    if search:
+        base_query = base_query.where(Trace.name.ilike(f"%{search}%"))
+
+    # Get total count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await session.execute(count_query)).scalar() or 0
+
+    # Get paginated results
+    data_query = base_query.order_by(Trace.created_at.desc()).limit(limit).offset(offset)
+    result = await session.execute(data_query)
+    traces = list(result.scalars().all())
+
+    return {
+        "traces": traces,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{trace_id}", response_model=TraceResponse)

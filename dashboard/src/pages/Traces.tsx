@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
 interface Trace {
@@ -18,9 +18,17 @@ function Traces() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const limit = 20;
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const fetchTraces = useCallback(async (offset: number) => {
     setLoading(true);
@@ -29,33 +37,37 @@ function Traces() {
         limit: limit.toString(),
         offset: offset.toString(),
       });
-      if (statusFilter) {
-        params.set('status', statusFilter);
-      }
+      if (statusFilter) params.set('status', statusFilter);
+      if (debouncedSearch) params.set('search', debouncedSearch);
 
       const response = await fetch(`/api/v1/traces?${params}`);
       if (!response.ok) throw new Error('Failed to fetch traces');
 
       const data = await response.json();
-      setTraces(data);
-      setHasMore(data.length === limit);
+      setTraces(data.traces);
+      setTotal(data.total);
+      setHasMore(offset + data.traces.length < data.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, debouncedSearch]);
 
+  // Reset to page 0 when filters change, then fetch
   useEffect(() => {
-    fetchTraces(page * limit);
-  }, [page, fetchTraces]);
+    setPage(0);
+    fetchTraces(0);
+  }, [fetchTraces]);
 
-  const filteredTraces = traces.filter((trace) => {
-    if (search && !trace.name.toLowerCase().includes(search.toLowerCase())) {
-      return false;
+  // Fetch when page changes (but not on initial mount or filter change)
+  const prevPageRef = useRef(page);
+  useEffect(() => {
+    if (prevPageRef.current !== page) {
+      prevPageRef.current = page;
+      fetchTraces(page * limit);
     }
-    return true;
-  });
+  }, [page, fetchTraces]);
 
   const formatDuration = (start: string, end: string | null) => {
     if (!end) return '-';
@@ -135,14 +147,14 @@ function Traces() {
                     Loading...
                   </td>
                 </tr>
-              ) : filteredTraces.length === 0 ? (
+              ) : traces.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-6 py-8 text-center text-gray-400">
                     No traces found
                   </td>
                 </tr>
               ) : (
-                filteredTraces.map((trace) => (
+                traces.map((trace) => (
                   <tr key={trace.id} className="hover:bg-gray-750">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-white">
                       <Link
@@ -172,7 +184,7 @@ function Traces() {
       {/* Pagination */}
       <div className="mt-4 flex items-center justify-between">
         <div className="text-sm text-gray-400">
-          Page {page + 1} {hasMore ? `(showing ${traces.length} traces)` : `(all ${traces.length} traces)`}
+          Page {page + 1} of {Math.ceil(total / limit)} ({total} traces total)
         </div>
         <div className="flex gap-2">
           <button
