@@ -4,24 +4,30 @@ interface Span {
   id: string;
   name: string;
   span_type: string;
-  start_time: number;
-  end_time?: number;
+  start_time: string | number;
+  end_time?: string | number | null;
   status: string;
-  tokens_input?: number;
-  tokens_output?: number;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
 }
 
 interface TraceWaterfallProps {
   traceId: string;
+  spans?: Span[];
 }
 
-function TraceWaterfall({ traceId }: TraceWaterfallProps) {
+function TraceWaterfall({ traceId, spans: spansProp }: TraceWaterfallProps) {
   const [spans, setSpans] = useState<Span[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (spansProp) {
+      setSpans(spansProp);
+      setLoading(false);
+      return;
+    }
     fetchSpans();
-  }, [traceId]);
+  }, [traceId, spansProp]);
 
   const fetchSpans = async () => {
     try {
@@ -53,17 +59,27 @@ function TraceWaterfall({ traceId }: TraceWaterfallProps) {
     );
   }
 
-  const minStart = Math.min(...spans.map((s) => s.start_time));
-  const maxEnd = Math.max(...spans.map((s) => s.end_time || s.start_time));
+  const toMs = (t: string | number | null | undefined) => {
+    if (t == null) return Date.now();
+    return typeof t === 'string' ? new Date(t).getTime() : t * 1000;
+  };
+  const spansMs = spans.map((s) => ({
+    ...s,
+    _start: toMs(s.start_time),
+    _end: toMs(s.end_time ?? s.start_time),
+  }));
+
+  const minStart = Math.min(...spansMs.map((s) => s._start));
+  const maxEnd = Math.max(...spansMs.map((s) => s._end));
   const totalDuration = maxEnd - minStart;
 
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <h3 className="text-lg font-semibold mb-4">Trace Waterfall</h3>
       <div className="space-y-2">
-        {spans.map((span) => {
-          const startOffset = span.start_time - minStart;
-          const duration = (span.end_time || span.start_time) - span.start_time;
+        {spansMs.map((span) => {
+          const startOffset = span._start - minStart;
+          const duration = span._end - span._start;
           const leftPercent = (startOffset / totalDuration) * 100;
           const widthPercent = (duration / totalDuration) * 100;
 

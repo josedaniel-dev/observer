@@ -187,19 +187,27 @@ def spans(trace_id: str, db: str, output_format: str) -> None:
 @click.option("--db", default="sqlite+aiosqlite:///./observatory.db", help="Database URL")
 def serve(host: str, port: int, reload: bool, db: str) -> None:
     """Start the observatory backend server."""
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]Error: uvicorn is not installed.[/red]")
+        console.print("Install it with: pip install 'llm-observatory-backend[sqlite]'")
+        return
 
     import os
     os.environ["DATABASE_URL"] = db
 
     console.print(f"[green]Starting LLM Observatory server on {host}:{port}[/green]")
     console.print(f"[green]Database: {db}[/green]")
-    uvicorn.run(
-        "app.main:app",
-        host=host,
-        port=port,
-        reload=reload,
-    )
+
+    try:
+        from app.main import app as fastapi_app
+        uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
+    except ImportError:
+        console.print("[red]Error: backend app module not found.[/red]")
+        console.print("Make sure the backend is installed: pip install -e ../backend")
+    except Exception as e:
+        console.print(f"[red]Server error: {e}[/red]")
 
 
 @cli.command()
@@ -227,20 +235,75 @@ def evaluate(
 
     try:
         response = httpx.post(
-            f"{endpoint}/v1/evaluations",
+            f"{endpoint}/v1/evaluations/run",
             json={
                 "trace_id": trace_id,
                 "evaluator_type": evaluator,
-                "criteria": {"criteria": criteria_list} if criteria_list else None,
+                "criteria": [{"name": c.strip(), "description": c.strip()} for c in criteria_list] if criteria_list else [],
             },
         )
         response.raise_for_status()
 
         result = response.json()
-        console.print("[green]Evaluation created successfully![/green]")
-        console.print(f"ID: {result['id']}")
+        console.print("[green]Evaluation completed successfully![/green]")
+        console.print(f"Score: {result.get('score', 'N/A')}")
+        console.print(f"Passed: {result.get('passed', 'N/A')}")
+        if result.get("criteria"):
+            console.print("Criteria scores:")
+            for k, v in result["criteria"].items():
+                console.print(f"  {k}: {v}")
     except httpx.HTTPError as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
+@cli.command()
+@click.option("--db", type=click.Path(exists=True), default="observatory.db", help="SQLite database path")
+@click.option("--format", "output_format", type=click.Choice(["json"]), default="json", help="Export format")
+@click.option("--output", "-o", type=click.Path(), help="Output file (default: stdout)")
+@click.option("--status", type=click.Choice(["ok", "error", "unset"]), help="Filter by status")
+@click.option("--limit", default=1000, help="Max traces to export")
+def export(db: str, output_format: str, output: str | None, status: str | None, limit: int) -> None:
+    """Export traces and spans to a file."""
+    import json
+
+    from cli.db import get_trace_spans, list_traces
+
+    rows = list_traces(Path(db), limit=limit, status=status)
+
+    if not rows:
+        console.print("[yellow]No traces to export[/yellow]")
+        return
+
+    traces_data = []
+    for row in rows:
+        trace_id = str(row["id"])
+        spans = get_trace_spans(trace_id, Path(db))
+        traces_data.append({
+            "id": trace_id,
+            "name": row["name"],
+            "status": row["status"],
+            "session_id": row.get("session_id"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+            "metadata": json.loads(row["metadata"]) if row.get("metadata") else None,
+            "created_at": row.get("created_at"),
+            "spans": spans,
+        })
+
+    export_data = {
+        "format": "llm-observatory-export",
+        "version": "0.1.0",
+        "trace_count": len(traces_data),
+        "traces": traces_data,
+    }
+
+    json_str = json.dumps(export_data, indent=2, default=str)
+
+    if output:
+        Path(output).write_text(json_str)
+        console.print(f"[green]Exported {len(traces_data)} traces to {output}[/green]")
+    else:
+        console.print(json_str)
 
 
 @cli.command()

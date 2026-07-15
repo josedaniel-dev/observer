@@ -15,6 +15,7 @@ from app.db import get_session
 from app.models.evaluation import Evaluation
 from app.models.trace import Trace, Span
 from app.evaluators import create_evaluator, EvaluatorType, EvaluationCriteria
+from app.websocket import manager
 
 router = APIRouter()
 
@@ -68,6 +69,18 @@ async def create_evaluation(
     )
     session.add(evaluation)
     await session.flush()
+
+    await manager.broadcast({
+        "type": "new_evaluation",
+        "data": {
+            "id": evaluation.id,
+            "trace_id": evaluation.trace_id,
+            "evaluator_type": evaluation.evaluator_type,
+            "score": float(evaluation.score) if evaluation.score else None,
+            "created_at": evaluation.created_at.isoformat() if evaluation.created_at else None,
+        },
+    })
+
     return evaluation
 
 
@@ -159,6 +172,17 @@ async def run_evaluation(
     session.add(evaluation)
     await session.flush()
 
+    await manager.broadcast({
+        "type": "new_evaluation",
+        "data": {
+            "id": evaluation.id,
+            "trace_id": evaluation.trace_id,
+            "evaluator_type": evaluation.evaluator_type,
+            "score": float(evaluation.score) if evaluation.score else None,
+            "created_at": evaluation.created_at.isoformat() if evaluation.created_at else None,
+        },
+    })
+
     return evaluation
 
 
@@ -198,3 +222,21 @@ async def get_evaluation(
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
     return evaluation
+
+
+@router.delete("/{evaluation_id}")
+async def delete_evaluation(
+    evaluation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Delete an evaluation."""
+    query = select(Evaluation).where(Evaluation.id == evaluation_id)
+    result = await session.execute(query)
+    evaluation = result.scalar_one_or_none()
+
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    await session.delete(evaluation)
+    await session.flush()
+    return {"detail": "Evaluation deleted"}

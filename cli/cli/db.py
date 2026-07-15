@@ -8,12 +8,61 @@ from typing import Any, Optional
 
 DEFAULT_DB_PATH = Path("observatory.db")
 
+# DDL to create tables if the database is fresh/empty
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS traces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    session_id TEXT,
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'unset',
+    metadata JSON,
+    created_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_traces_session_id ON traces (session_id);
+
+CREATE TABLE IF NOT EXISTS spans (
+    id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL REFERENCES traces(id) ON DELETE CASCADE,
+    parent_span_id TEXT REFERENCES spans(id),
+    name TEXT NOT NULL,
+    span_type TEXT NOT NULL DEFAULT 'generic',
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'unset',
+    input JSON,
+    output JSON,
+    tokens_input INTEGER,
+    tokens_output INTEGER,
+    cost_usd NUMERIC(10, 6),
+    metadata JSON,
+    attributes JSON
+);
+CREATE INDEX IF NOT EXISTS ix_spans_trace_id ON spans (trace_id);
+CREATE INDEX IF NOT EXISTS ix_spans_parent_span_id ON spans (parent_span_id);
+
+CREATE TABLE IF NOT EXISTS evaluations (
+    id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL REFERENCES traces(id) ON DELETE CASCADE,
+    span_id TEXT REFERENCES spans(id) ON DELETE CASCADE,
+    evaluator_type TEXT NOT NULL,
+    score NUMERIC(5, 4),
+    criteria JSON,
+    result JSON,
+    created_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_evaluations_trace_id ON evaluations (trace_id);
+CREATE INDEX IF NOT EXISTS ix_evaluations_span_id ON evaluations (span_id);
+"""
+
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
-    """Get a SQLite connection."""
+    """Get a SQLite connection and ensure schema exists."""
     path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
+    conn.executescript(_SCHEMA_SQL)
     return conn
 
 

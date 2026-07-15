@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy import JSON
 from sqlalchemy.orm import relationship
 
@@ -23,8 +23,8 @@ class Trace(Base):
     start_time = Column(DateTime(timezone=True), nullable=False)
     end_time = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), nullable=False, default="unset")
-    metadata_ = Column("metadata", JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    meta = Column("metadata", JSON, nullable=True, key="meta")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     spans = relationship("Span", back_populates="trace", cascade="all, delete-orphan")
@@ -45,12 +45,12 @@ class Span(Base):
     start_time = Column(DateTime(timezone=True), nullable=False)
     end_time = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), nullable=False, default="unset")
-    input_ = Column("input", JSON, nullable=True)
-    output_ = Column("output", JSON, nullable=True)
+    inp = Column("input", JSON, nullable=True, key="inp")
+    out = Column("output", JSON, nullable=True, key="out")
     tokens_input = Column(Integer, nullable=True)
     tokens_output = Column(Integer, nullable=True)
     cost_usd = Column(Numeric(10, 6), nullable=True)
-    metadata_ = Column("metadata", JSON, nullable=True)
+    meta = Column("metadata", JSON, nullable=True, key="meta")
     attributes = Column(JSON, nullable=True)
 
     # Relationships

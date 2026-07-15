@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import traces, evaluations
+from app.api import traces, evaluations, analytics
 from app.db.postgres import engine
 from app.websocket import manager
 
@@ -29,10 +30,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware - configurable via CORS_ORIGINS env var (comma-separated)
+_cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000",
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in _cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,6 +46,7 @@ app.add_middleware(
 # Include routers
 app.include_router(traces.router, prefix="/v1/traces", tags=["traces"])
 app.include_router(evaluations.router, prefix="/v1/evaluations", tags=["evaluations"])
+app.include_router(analytics.router, prefix="/v1/analytics", tags=["analytics"])
 
 
 @app.get("/health")

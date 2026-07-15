@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String
 from sqlalchemy import JSON
@@ -36,4 +36,4 @@ class Evaluation(Base):
     score = Column(Numeric(5, 4), nullable=True)
     criteria = Column(JSON, nullable=True)
     result = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

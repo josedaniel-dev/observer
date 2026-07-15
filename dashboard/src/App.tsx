@@ -1,7 +1,19 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
-import Overview from './pages/Overview';
-import Traces from './pages/Traces';
-import Evaluations from './pages/Evaluations';
+
+// Code-split page components
+const Overview = lazy(() => import('./pages/Overview'));
+const Traces = lazy(() => import('./pages/Traces'));
+const TraceDetail = lazy(() => import('./pages/TraceDetail'));
+const Evaluations = lazy(() => import('./pages/Evaluations'));
+
+function LoadingFallback() {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <div className="text-gray-400">Loading...</div>
+    </div>
+  );
+}
 
 function App() {
   return (
@@ -41,11 +53,20 @@ function App() {
 
       {/* Main content */}
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/traces" element={<Traces />} />
-          <Route path="/evaluations" element={<Evaluations />} />
-        </Routes>
+        <Suspense fallback={<LoadingFallback />}>
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/traces" element={<Traces />} />
+            <Route path="/traces/:traceId" element={<TraceDetail />} />
+            <Route path="/evaluations" element={<Evaluations />} />
+            <Route path="*" element={
+              <div className="text-center py-20">
+                <h1 className="text-4xl font-bold text-white mb-4">404</h1>
+                <p className="text-gray-400">Page not found</p>
+              </div>
+            } />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );

@@ -5,12 +5,16 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import logging
+import threading
 import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 # Context variable for current span
 _current_span: ContextVar[Optional[Span]] = ContextVar("current_span", default=None)
@@ -101,6 +105,8 @@ class Tracer:
         service_name: str = "llm-observatory",
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
+        batch_size: int = 10,
+        flush_interval: float = 5.0,
     ) -> None:
         """Initialize the tracer.
 
@@ -108,12 +114,48 @@ class Tracer:
             service_name: Name of the service being traced.
             endpoint: Endpoint URL for the observatory backend.
             api_key: API key for authentication.
+            batch_size: Number of spans to buffer before flushing.
+            flush_interval: Seconds between automatic flushes.
         """
         self.service_name = service_name
         self.endpoint = endpoint
         self.api_key = api_key
+        self.batch_size = batch_size
+        self.flush_interval = flush_interval
         self._spans: list[Span] = []
         self._exporters: list[Any] = []
+        self._buffer: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._flush_thread: Optional[threading.Thread] = None
+        self._shutdown = False
+
+        # Auto-start flush thread if we have an endpoint
+        if endpoint:
+            self._start_flush_thread()
+
+    def _start_flush_thread(self) -> None:
+        """Start background flush thread."""
+        if self._flush_thread is not None:
+            return
+
+        def flush_loop() -> None:
+            while not self._shutdown:
+                time.sleep(self.flush_interval)
+                try:
+                    self.flush()
+                except Exception as e:
+                    logger.warning(f"Flush failed: {e}")
+
+        self._flush_thread = threading.Thread(target=flush_loop, daemon=True)
+        self._flush_thread.start()
+
+    def add_exporter(self, exporter: Any) -> None:
+        """Add an exporter to the tracer.
+
+        Args:
+            exporter: Exporter instance with an export(spans) method.
+        """
+        self._exporters.append(exporter)
 
     def start_trace(self, name: str, **attributes: Any) -> Span:
         """Start a new trace.
@@ -132,6 +174,15 @@ class Tracer:
             attributes=attributes,
         )
         self._spans.append(span)
+
+        # Auto-export if we have exporters
+        if self._exporters:
+            span_dict = self._span_to_dict(span)
+            with self._lock:
+                self._buffer.append(span_dict)
+                if len(self._buffer) >= self.batch_size:
+                    self._flush_buffer()
+
         return span
 
     def start_span(
@@ -161,7 +212,36 @@ class Tracer:
             attributes=attributes,
         )
         self._spans.append(span)
+
+        # Auto-export if we have exporters
+        if self._exporters:
+            span_dict = self._span_to_dict(span)
+            with self._lock:
+                self._buffer.append(span_dict)
+                if len(self._buffer) >= self.batch_size:
+                    self._flush_buffer()
+
         return span
+
+    def _span_to_dict(self, span: Span) -> dict[str, Any]:
+        """Convert a span to a dictionary for export."""
+        return {
+            "id": span.id,
+            "trace_id": span.trace_id,
+            "parent_id": span.parent_id,
+            "name": span.name,
+            "span_type": span.span_type,
+            "start_time": span.start_time,
+            "end_time": span.end_time,
+            "status": span.status.value,
+            "input": span.input,
+            "output": span.output,
+            "tokens_input": span.tokens.input if span.tokens else None,
+            "tokens_output": span.tokens.output if span.tokens else None,
+            "cost_usd": span.cost_usd,
+            "metadata": span.metadata,
+            "attributes": span.attributes,
+        }
 
     def export(self) -> list[dict[str, Any]]:
         """Export all spans as dictionaries.
@@ -169,35 +249,48 @@ class Tracer:
         Returns:
             List of span dictionaries.
         """
-        return [
-            {
-                "id": span.id,
-                "trace_id": span.trace_id,
-                "parent_id": span.parent_id,
-                "name": span.name,
-                "span_type": span.span_type,
-                "start_time": span.start_time,
-                "end_time": span.end_time,
-                "status": span.status.value,
-                "input": span.input,
-                "output": span.output,
-                "tokens": {
-                    "input": span.tokens.input,
-                    "output": span.tokens.output,
-                    "total": span.tokens.total,
-                }
-                if span.tokens
-                else None,
-                "cost_usd": span.cost_usd,
-                "metadata": span.metadata,
-                "attributes": span.attributes,
-            }
-            for span in self._spans
-        ]
+        return [self._span_to_dict(span) for span in self._spans]
+
+    def flush(self) -> None:
+        """Flush buffered spans to exporters."""
+        with self._lock:
+            if not self._buffer:
+                return
+            spans_to_export = self._buffer.copy()
+            self._buffer.clear()
+
+        for exporter in self._exporters:
+            try:
+                exporter.export(spans_to_export)
+            except Exception as e:
+                logger.warning(f"Exporter failed: {e}")
+
+    def _flush_buffer(self) -> None:
+        """Flush buffer (must hold lock)."""
+        if not self._buffer:
+            return
+        spans_to_export = self._buffer.copy()
+        self._buffer.clear()
+
+        for exporter in self._exporters:
+            try:
+                exporter.export(spans_to_export)
+            except Exception as e:
+                logger.warning(f"Exporter failed: {e}")
 
     def clear(self) -> None:
         """Clear all collected spans."""
         self._spans.clear()
+
+    def shutdown(self) -> None:
+        """Shutdown the tracer, flushing any remaining spans."""
+        self._shutdown = True
+        self.flush()
+        for exporter in self._exporters:
+            try:
+                exporter.flush()
+            except Exception:
+                pass
 
 
 def trace(

@@ -128,6 +128,38 @@ export function instrument(): void {
           }
         };
       }
+
+      // Patch async client if available
+      if (openai.AsyncOpenAI) {
+        const asyncProto = openai.AsyncOpenAI.prototype;
+        if (asyncProto?.chat?.completions?.create) {
+          originalAsyncCreate = asyncProto.chat.completions.create;
+          asyncProto.chat.completions.create = function (
+            this: object,
+            ...args: unknown[]
+          ) {
+            const options = args[0] as Record<string, unknown> | undefined;
+            const model = (options?.model as string) || "unknown";
+            const messages = (options?.messages as unknown[]) || [];
+
+            const span = buildSpan(model, messages);
+            const ctx = this;
+
+            return (originalAsyncCreate!.apply(ctx, args) as Promise<unknown>).then(
+              (result: unknown) => {
+                finishSpan(span, result, model);
+                return result;
+              },
+              (error: Error) => {
+                span.status = "error";
+                span.attributes["error.message"] = error.message;
+                span.endTime = Date.now() / 1000;
+                throw error;
+              }
+            );
+          };
+        }
+      }
     }
   } catch {
     // OpenAI not available, skip instrumentation
@@ -140,6 +172,9 @@ export function uninstrument(): void {
     const openai = require("openai");
     if (openai?.OpenAI && originalSyncCreate) {
       openai.OpenAI.prototype.chat.completions.create = originalSyncCreate;
+    }
+    if (openai?.AsyncOpenAI && originalAsyncCreate) {
+      openai.AsyncOpenAI.prototype.chat.completions.create = originalAsyncCreate;
     }
   } catch {
     // Ignore
