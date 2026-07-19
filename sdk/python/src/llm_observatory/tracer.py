@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Context variable for current span
-_current_span: ContextVar[Optional[Span]] = ContextVar("current_span", default=None)
+_current_span: ContextVar[Span | None] = ContextVar("current_span", default=None)
 
 
 class SpanStatus(str, Enum):
@@ -43,16 +43,16 @@ class Span:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     trace_id: str = ""
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     name: str = ""
     span_type: str = "generic"
     start_time: float = field(default_factory=time.time)
-    end_time: Optional[float] = None
+    end_time: float | None = None
     status: SpanStatus = SpanStatus.UNSET
-    input: Optional[dict[str, Any]] = None
-    output: Optional[dict[str, Any]] = None
-    tokens: Optional[TokenUsage] = None
-    cost_usd: Optional[float] = None
+    input: dict[str, Any] | None = None
+    output: dict[str, Any] | None = None
+    tokens: TokenUsage | None = None
+    cost_usd: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     attributes: dict[str, Any] = field(default_factory=dict)
 
@@ -90,7 +90,7 @@ class Span:
         self.cost_usd = cost_usd
 
     @property
-    def duration_ms(self) -> Optional[float]:
+    def duration_ms(self) -> float | None:
         """Get duration in milliseconds."""
         if self.end_time is None:
             return None
@@ -103,8 +103,8 @@ class Tracer:
     def __init__(
         self,
         service_name: str = "llm-observatory",
-        endpoint: Optional[str] = None,
-        api_key: Optional[str] = None,
+        endpoint: str | None = None,
+        api_key: str | None = None,
         batch_size: int = 10,
         flush_interval: float = 5.0,
     ) -> None:
@@ -126,7 +126,7 @@ class Tracer:
         self._exporters: list[Any] = []
         self._buffer: list[dict[str, Any]] = []
         self._lock = threading.Lock()
-        self._flush_thread: Optional[threading.Thread] = None
+        self._flush_thread: threading.Thread | None = None
         self._shutdown = False
 
         # Auto-start flush thread if we have an endpoint
@@ -189,7 +189,7 @@ class Tracer:
         self,
         name: str,
         span_type: str = "generic",
-        parent: Optional[Span] = None,
+        parent: Span | None = None,
         **attributes: Any,
     ) -> Span:
         """Start a new span.
@@ -294,7 +294,7 @@ class Tracer:
 
 
 def trace(
-    name: Optional[str] = None,
+    name: str | None = None,
     span_type: str = "function",
 ) -> Callable:
     """Decorator to trace a function (sync or async).
@@ -357,7 +357,7 @@ def trace(
 
 
 # Global tracer instance
-_global_tracer: Optional[Tracer] = None
+_global_tracer: Tracer | None = None
 
 
 def _get_global_tracer() -> Tracer:

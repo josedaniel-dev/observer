@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from typing import Any, Optional
+from typing import Any
 
 from llm_observatory.pricing import calculate_cost
 from llm_observatory.tracer import Span, SpanStatus, get_tracer
@@ -13,8 +12,8 @@ class OpenAIInstrumentor:
     """Instruments OpenAI API calls to capture traces."""
 
     def __init__(self) -> None:
-        self._original_sync_create: Optional[Any] = None
-        self._original_async_create: Optional[Any] = None
+        self._original_sync_create: Any | None = None
+        self._original_async_create: Any | None = None
 
     def instrument(self) -> None:
         """Patch OpenAI to capture traces."""

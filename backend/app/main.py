@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
-from app.api import traces, evaluations, analytics
+from app.api import analytics, evaluations, traces
 from app.auth import require_api_key
 from app.db.postgres import engine
 from app.ratelimit import limiter
@@ -64,14 +64,35 @@ app.add_middleware(
 # Include routers with authentication
 _app_auth = Depends(require_api_key)
 app.include_router(traces.router, prefix="/v1/traces", tags=["traces"], dependencies=[_app_auth])
-app.include_router(evaluations.router, prefix="/v1/evaluations", tags=["evaluations"], dependencies=[_app_auth])
-app.include_router(analytics.router, prefix="/v1/analytics", tags=["analytics"], dependencies=[_app_auth])
+app.include_router(
+    evaluations.router,
+    prefix="/v1/evaluations",
+    tags=["evaluations"],
+    dependencies=[_app_auth],
+)
+app.include_router(
+    analytics.router,
+    prefix="/v1/analytics",
+    tags=["analytics"],
+    dependencies=[_app_auth],
+)
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "healthy"}
+async def health_check() -> dict:
+    """Health check endpoint with database status."""
+    from sqlalchemy import text
+
+    from app.db import async_session
+
+    db_status = "ok"
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception:
+        db_status = "error"
+
+    return {"status": "healthy", "db": db_status, "version": "0.1.0"}
 
 
 @app.get("/")

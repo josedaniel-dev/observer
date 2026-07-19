@@ -1,15 +1,6 @@
 import { useEffect, useState } from 'react';
-
-interface Span {
-  id: string;
-  name: string;
-  span_type: string;
-  start_time: string | number;
-  end_time?: string | number | null;
-  status: string;
-  tokens_input?: number | null;
-  tokens_output?: number | null;
-}
+import { api } from '../api';
+import type { Span } from '../types';
 
 interface TraceWaterfallProps {
   traceId: string;
@@ -26,22 +17,8 @@ function TraceWaterfall({ traceId, spans: spansProp }: TraceWaterfallProps) {
       setLoading(false);
       return;
     }
-    fetchSpans();
+    api.getTraceSpans(traceId).then(setSpans).catch(() => {}).finally(() => setLoading(false));
   }, [traceId, spansProp]);
-
-  const fetchSpans = async () => {
-    try {
-      const response = await fetch(`/api/v1/traces/${traceId}/spans`);
-      if (response.ok) {
-        const data = await response.json();
-        setSpans(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch spans:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -59,9 +36,9 @@ function TraceWaterfall({ traceId, spans: spansProp }: TraceWaterfallProps) {
     );
   }
 
-  const toMs = (t: string | number | null | undefined) => {
+  const toMs = (t: string | null | undefined) => {
     if (t == null) return Date.now();
-    return typeof t === 'string' ? new Date(t).getTime() : t * 1000;
+    return new Date(t).getTime();
   };
   const spansMs = spans.map((s) => ({
     ...s,
@@ -80,8 +57,8 @@ function TraceWaterfall({ traceId, spans: spansProp }: TraceWaterfallProps) {
         {spansMs.map((span) => {
           const startOffset = span._start - minStart;
           const duration = span._end - span._start;
-          const leftPercent = (startOffset / totalDuration) * 100;
-          const widthPercent = (duration / totalDuration) * 100;
+          const leftPercent = totalDuration > 0 ? (startOffset / totalDuration) * 100 : 0;
+          const widthPercent = totalDuration > 0 ? (duration / totalDuration) * 100 : 100;
 
           return (
             <div key={span.id} className="flex items-center">

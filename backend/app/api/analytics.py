@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -11,8 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.models.trace import Trace, Span
 from app.models.evaluation import Evaluation
+from app.models.trace import Span, Trace
 
 router = APIRouter()
 
@@ -27,7 +26,7 @@ class AnalyticsSummary(BaseModel):
     error_count: int
     error_rate: float
     total_evaluations: int
-    avg_evaluation_score: Optional[float]
+    avg_evaluation_score: float | None
 
 
 class CostByModel(BaseModel):
@@ -48,7 +47,7 @@ class TraceTimeline(BaseModel):
 
 @router.get("/summary", response_model=AnalyticsSummary)
 async def get_analytics_summary(
-    session_id: Optional[str] = Query(None),
+    session_id: str | None = Query(None),
     hours: int = Query(24, ge=1, le=720),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -131,7 +130,11 @@ async def get_cost_by_model(
     rows = result.all()
 
     return [
-        {"model": row.model or "unknown", "cost_usd": float(row.cost_usd or 0), "span_count": row.span_count}
+        {
+            "model": row.model or "unknown",
+            "cost_usd": float(row.cost_usd or 0),
+            "span_count": row.span_count,
+        }
         for row in rows
     ]
 
@@ -180,3 +183,58 @@ async def get_trace_timeline(
         buckets[key]["cost_usd"] += cost_by_trace.get(trace.id, 0)
 
     return list(buckets.values())
+
+
+# ── Sessions ─────────────────────────────────────────────────────────
+
+
+class SessionInfo(BaseModel):
+    """Session summary."""
+
+    session_id: str
+    trace_count: int
+    total_cost_usd: float
+    created_at: str | None
+    last_activity: str | None
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(
+    limit: int = Query(100, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """List unique sessions with aggregated stats."""
+    query = (
+        select(
+            Trace.session_id,
+            func.count(Trace.id).label("trace_count"),
+            func.coalesce(
+                func.sum(
+                    select(func.coalesce(func.sum(Span.cost_usd), 0))
+                    .where(Span.trace_id == Trace.id)
+                    .correlate(Trace)
+                    .scalar_subquery()
+                ),
+                0,
+            ).label("total_cost_usd"),
+            func.min(Trace.created_at).label("created_at"),
+            func.max(Trace.created_at).label("last_activity"),
+        )
+        .where(Trace.session_id.isnot(None))
+        .group_by(Trace.session_id)
+        .order_by(func.max(Trace.created_at).desc())
+        .limit(limit)
+    )
+    result = await session.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "session_id": str(row.session_id),
+            "trace_count": row.trace_count,
+            "total_cost_usd": float(row.total_cost_usd),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "last_activity": row.last_activity.isoformat() if row.last_activity else None,
+        }
+        for row in rows
+    ]

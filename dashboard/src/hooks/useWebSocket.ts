@@ -11,9 +11,15 @@ interface UseWebSocketOptions {
   reconnectInterval?: number;
 }
 
+function getDefaultWsUrl(): string {
+  if (typeof window === 'undefined') return 'ws://localhost/ws/live';
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws/live`;
+}
+
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
-    url = 'ws://localhost:8000/ws/live',
+    url = getDefaultWsUrl(),
     onMessage,
     reconnectInterval = 3000,
   } = options;
@@ -29,7 +35,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log('WebSocket connected');
       };
 
       ws.onmessage = (event) => {
@@ -37,25 +42,22 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           const message = JSON.parse(event.data) as WebSocketMessage;
           setLastMessage(message);
           onMessage?.(message);
-        } catch (e) {
-          console.error('Failed to parse WebSocket message:', e);
+        } catch {
+          // malformed message, ignore
         }
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log('WebSocket disconnected, reconnecting...');
         reconnectTimeoutRef.current = setTimeout(connect, reconnectInterval);
       };
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+      ws.onerror = () => {
         ws.close();
       };
 
       wsRef.current = ws;
-    } catch (error) {
-      console.error('Failed to connect WebSocket:', error);
+    } catch {
       reconnectTimeoutRef.current = setTimeout(connect, reconnectInterval);
     }
   };

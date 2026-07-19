@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   Tracer,
   Span,
@@ -7,6 +7,9 @@ import {
   getTracer,
   setTracer,
   getCurrentSpan,
+  calculateCost,
+  MODEL_PRICING,
+  SpanExporter,
 } from "../src/index";
 
 describe("Tracer", () => {
@@ -125,5 +128,145 @@ describe("Global tracer", () => {
     expect(getTracer()).toBe(custom);
     // Reset
     setTracer(new Tracer());
+  });
+});
+
+describe("Tracer exporter integration", () => {
+  let tracer: Tracer;
+  let mockExporter: SpanExporter;
+
+  beforeEach(() => {
+    tracer = new Tracer({ serviceName: "test" });
+    mockExporter = {
+      export: vi.fn(),
+    };
+  });
+
+  it("calls exporter when trace ends via trace()", () => {
+    tracer.addExporter(mockExporter);
+    setTracer(tracer);
+
+    trace("test", (span) => {
+      span.attributes["key"] = "value";
+      return 42;
+    });
+
+    expect(mockExporter.export).toHaveBeenCalledTimes(1);
+    const exportedSpans = (mockExporter.export as any).mock.calls[0][0];
+    expect(exportedSpans).toHaveLength(1);
+    expect(exportedSpans[0].status).toBe("ok");
+
+    setTracer(new Tracer());
+  });
+
+  it("calls exporter when async trace ends", async () => {
+    tracer.addExporter(mockExporter);
+    setTracer(tracer);
+
+    await asyncTrace("test", async (span) => {
+      return "done";
+    });
+
+    expect(mockExporter.export).toHaveBeenCalledTimes(1);
+    setTracer(new Tracer());
+  });
+
+  it("calls exporter on endSpan()", () => {
+    tracer.addExporter(mockExporter);
+    const span = tracer.startTrace("test");
+    tracer.endSpan(span);
+
+    expect(mockExporter.export).toHaveBeenCalledTimes(1);
+    expect(span.endTime).toBeDefined();
+  });
+
+  it("does not double-end a span", () => {
+    tracer.addExporter(mockExporter);
+    const span = tracer.startTrace("test");
+    span.endTime = 100;
+    tracer.endSpan(span);
+
+    // endTime should not change
+    expect(span.endTime).toBe(100);
+    expect(mockExporter.export).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports multiple exporters", () => {
+    const exporter2: SpanExporter = { export: vi.fn() };
+    tracer.addExporter(mockExporter);
+    tracer.addExporter(exporter2);
+
+    const span = tracer.startTrace("test");
+    tracer.endSpan(span);
+
+    expect(mockExporter.export).toHaveBeenCalledTimes(1);
+    expect(exporter2.export).toHaveBeenCalledTimes(1);
+  });
+
+  it("removeExporter works", () => {
+    tracer.addExporter(mockExporter);
+    tracer.removeExporter(mockExporter);
+
+    const span = tracer.startTrace("test");
+    tracer.endSpan(span);
+
+    expect(mockExporter.export).not.toHaveBeenCalled();
+  });
+
+  it("flush calls exporter flush", async () => {
+    const flushExporter: SpanExporter = {
+      export: vi.fn(),
+      flush: vi.fn(),
+    };
+    tracer.addExporter(flushExporter);
+
+    await tracer.flush();
+
+    expect(flushExporter.flush).toHaveBeenCalledTimes(1);
+  });
+
+  it("exporter errors do not break tracing", () => {
+    const badExporter: SpanExporter = {
+      export: () => {
+        throw new Error("export failed");
+      },
+    };
+    tracer.addExporter(badExporter);
+
+    // Should not throw
+    const result = trace("test", () => 42);
+    expect(result).toBe(42);
+  });
+});
+
+describe("Pricing", () => {
+  it("calculates cost for known OpenAI model", () => {
+    const cost = calculateCost("gpt-4o", 1000, 500);
+    // (1000/1M)*2.5 + (500/1M)*10.0 = 0.0025 + 0.005 = 0.0075
+    expect(cost).toBeCloseTo(0.0075, 6);
+  });
+
+  it("calculates cost for known Anthropic model", () => {
+    const cost = calculateCost("claude-3-5-sonnet", 1000, 500);
+    expect(cost).toBeCloseTo(0.0105, 6);
+  });
+
+  it("returns null for unknown model", () => {
+    expect(calculateCost("unknown-model", 1000, 500)).toBeNull();
+  });
+
+  it("has pricing for all expected models", () => {
+    const expected = [
+      "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",       "gpt-3.5-turbo",
+      "o1", "o1-mini", "o3", "o3-mini",
+      "claude-4-opus", "claude-4-sonnet", "claude-3-5-sonnet",
+      "claude-3-5-haiku", "claude-3-opus", "claude-3-sonnet", "claude-3-haiku",
+      "gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash",
+    ];
+    for (const model of expected) {
+      expect(MODEL_PRICING[model]).toBeDefined();
+      expect(MODEL_PRICING[model].input).toBeGreaterThan(0);
+      expect(MODEL_PRICING[model].output).toBeGreaterThan(0);
+    }
   });
 });

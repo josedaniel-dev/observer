@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator, model_validator
-from slowapi import Limiter
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
-from app.models.trace import Trace, Span
+from app.models.trace import Span, Trace
 from app.ratelimit import limiter
 from app.websocket import manager
 
@@ -35,32 +33,32 @@ def _safe_uuid(value: str | None) -> str | None:
 class SpanCreate(BaseModel):
     """Schema for creating a span."""
 
-    id: Optional[str] = None
-    trace_id: Optional[str] = None
-    parent_id: Optional[str] = None
+    id: str | None = None
+    trace_id: str | None = None
+    parent_id: str | None = None
     name: str
     span_type: str = "generic"
     start_time: float
-    end_time: Optional[float] = None
+    end_time: float | None = None
     status: str = "unset"
-    input: Optional[dict] = None
-    output: Optional[dict] = None
-    tokens_input: Optional[int] = None
-    tokens_output: Optional[int] = None
-    cost_usd: Optional[float] = None
-    metadata: Optional[dict] = None
-    attributes: Optional[dict] = None
+    input: dict | None = None
+    output: dict | None = None
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    cost_usd: float | None = None
+    metadata: dict | None = None
+    attributes: dict | None = None
 
 
 class TraceCreate(BaseModel):
     """Schema for creating a trace."""
 
     name: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
     start_time: float
-    end_time: Optional[float] = None
+    end_time: float | None = None
     status: str = "unset"
-    metadata: Optional[dict] = None
+    metadata: dict | None = None
     spans: list[SpanCreate] = []
 
     @field_validator("session_id")
@@ -87,11 +85,11 @@ class TraceResponse(BaseModel):
 
     id: str
     name: str
-    session_id: Optional[str]
+    session_id: str | None
     start_time: datetime
-    end_time: Optional[datetime]
+    end_time: datetime | None
     status: str
-    metadata: Optional[dict]
+    metadata: dict | None
     created_at: datetime
 
     @model_validator(mode="before")
@@ -127,19 +125,19 @@ class SpanResponse(BaseModel):
 
     id: str
     trace_id: str
-    parent_id: Optional[str]
+    parent_id: str | None
     name: str
     span_type: str
     start_time: datetime
-    end_time: Optional[datetime]
+    end_time: datetime | None
     status: str
-    input: Optional[dict]
-    output: Optional[dict]
-    tokens_input: Optional[int]
-    tokens_output: Optional[int]
-    cost_usd: Optional[float]
-    metadata: Optional[dict]
-    attributes: Optional[dict]
+    input: dict | None
+    output: dict | None
+    tokens_input: int | None
+    tokens_output: int | None
+    cost_usd: float | None
+    metadata: dict | None
+    attributes: dict | None
 
     @model_validator(mode="before")
     @classmethod
@@ -177,7 +175,11 @@ async def create_trace(
         name=trace_data.name,
         session_id=trace_data.session_id,
         start_time=datetime.fromtimestamp(trace_data.start_time, tz=timezone.utc),
-        end_time=datetime.fromtimestamp(trace_data.end_time, tz=timezone.utc) if trace_data.end_time else None,
+        end_time=(
+            datetime.fromtimestamp(trace_data.end_time, tz=timezone.utc)
+            if trace_data.end_time
+            else None
+        ),
         status=trace_data.status,
         meta=trace_data.metadata,
     )
@@ -185,6 +187,11 @@ async def create_trace(
 
     # Add spans
     for span_data in trace_data.spans:
+        span_end = (
+            datetime.fromtimestamp(span_data.end_time, tz=timezone.utc)
+            if span_data.end_time
+            else None
+        )
         span = Span(
             id=span_data.id or str(uuid.uuid4()),
             trace_id=trace_id,
@@ -192,7 +199,7 @@ async def create_trace(
             name=span_data.name,
             span_type=span_data.span_type,
             start_time=datetime.fromtimestamp(span_data.start_time, tz=timezone.utc),
-            end_time=datetime.fromtimestamp(span_data.end_time, tz=timezone.utc) if span_data.end_time else None,
+            end_time=span_end,
             status=span_data.status,
             inp=span_data.input,
             out=span_data.output,
@@ -255,7 +262,11 @@ async def create_traces_batch(
                 id=trace_id,
                 name=first_span.name,
                 start_time=datetime.fromtimestamp(first_span.start_time, tz=timezone.utc),
-                end_time=datetime.fromtimestamp(spans[-1].end_time, tz=timezone.utc) if spans[-1].end_time else None,
+                end_time=(
+                    datetime.fromtimestamp(spans[-1].end_time, tz=timezone.utc)
+                    if spans[-1].end_time
+                    else None
+                ),
                 status="ok" if all(s.status == "ok" for s in spans) else "error",
             )
             session.add(trace)
@@ -269,7 +280,11 @@ async def create_traces_batch(
                 name=span_data.name,
                 span_type=span_data.span_type,
                 start_time=datetime.fromtimestamp(span_data.start_time, tz=timezone.utc),
-                end_time=datetime.fromtimestamp(span_data.end_time, tz=timezone.utc) if span_data.end_time else None,
+                end_time=(
+                    datetime.fromtimestamp(span_data.end_time, tz=timezone.utc)
+                    if span_data.end_time
+                    else None
+                ),
                 status=span_data.status,
                 inp=span_data.input,
                 out=span_data.output,
@@ -302,9 +317,9 @@ async def create_traces_batch(
 
 @router.get("/", response_model=TraceListResponse)
 async def list_traces(
-    session_id: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
+    session_id: str | None = Query(None),
+    status: str | None = Query(None),
+    search: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -338,6 +353,113 @@ async def list_traces(
         "limit": limit,
         "offset": offset,
     }
+
+
+# ── Export ──────────────────────────────────────────────────────────────
+
+
+class ExportSpanData(BaseModel):
+    """Span data in export format."""
+
+    name: str
+    span_type: str
+    start_time: datetime
+    end_time: datetime | None
+    status: str
+    input: dict | None = None
+    output: dict | None = None
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    cost_usd: float | None = None
+    metadata: dict | None = None
+    attributes: dict | None = None
+
+
+class ExportTraceData(BaseModel):
+    """Trace data in export format."""
+
+    name: str
+    session_id: str | None
+    start_time: datetime
+    end_time: datetime | None
+    status: str
+    metadata: dict | None
+    spans: list[ExportSpanData]
+
+
+class ExportResponse(BaseModel):
+    """Response for trace export."""
+
+    traces: list[ExportTraceData]
+    total: int
+
+
+@router.get("/export", response_model=ExportResponse)
+async def export_traces(
+    status: str | None = Query(None),
+    session_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Export traces with spans in JSON format.
+
+    Compatible with the import endpoint for migration between instances.
+    """
+    base_query = select(Trace)
+
+    if status:
+        base_query = base_query.where(Trace.status == status)
+
+    if session_id:
+        valid_sid = _safe_uuid(session_id)
+        if valid_sid:
+            base_query = base_query.where(Trace.session_id == valid_sid)
+
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await session.execute(count_query)).scalar() or 0
+
+    data_query = (
+        base_query.options(selectinload(Trace.spans))
+        .order_by(Trace.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(data_query)
+    traces = list(result.scalars().unique().all())
+
+    export_traces = []
+    for trace in traces:
+        export_spans = [
+            ExportSpanData(
+                name=s.name,
+                span_type=s.span_type,
+                start_time=s.start_time,
+                end_time=s.end_time,
+                status=s.status,
+                input=s.inp,
+                output=s.out,
+                tokens_input=s.tokens_input,
+                tokens_output=s.tokens_output,
+                cost_usd=float(s.cost_usd) if s.cost_usd else None,
+                metadata=s.meta,
+                attributes=s.attributes,
+            )
+            for s in trace.spans
+        ]
+        export_traces.append(
+            ExportTraceData(
+                name=trace.name,
+                session_id=trace.session_id,
+                start_time=trace.start_time,
+                end_time=trace.end_time,
+                status=trace.status,
+                metadata=trace.meta,
+                spans=export_spans,
+            )
+        )
+
+    return {"traces": export_traces, "total": total}
 
 
 @router.get("/{trace_id}", response_model=TraceResponse)
@@ -401,6 +523,76 @@ async def delete_trace(
     return {"detail": "Trace deleted"}
 
 
+# ── Trace Evaluations ────────────────────────────────────────────────
+
+
+@router.get("/{trace_id}/evaluations")
+async def get_trace_evaluations(
+    trace_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Get all evaluations for a specific trace."""
+    from app.models.evaluation import Evaluation
+
+    valid_id = _safe_uuid(trace_id)
+    if not valid_id:
+        raise HTTPException(status_code=400, detail="Invalid trace ID format")
+
+    query = (
+        select(Evaluation)
+        .where(Evaluation.trace_id == valid_id)
+        .order_by(Evaluation.created_at.desc())
+    )
+    result = await session.execute(query)
+    evaluations = list(result.scalars().all())
+
+    return [
+        {
+            "id": e.id,
+            "trace_id": e.trace_id,
+            "span_id": e.span_id,
+            "evaluator_type": e.evaluator_type,
+            "score": float(e.score) if e.score is not None else None,
+            "criteria": e.criteria,
+            "result": e.result,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in evaluations
+    ]
+
+
+# ── Bulk Delete ──────────────────────────────────────────────────────
+
+
+class BulkDeleteRequest(BaseModel):
+    """Schema for bulk delete."""
+
+    trace_ids: list[str]
+
+
+@router.post("/batch-delete")
+async def bulk_delete_traces(
+    req: BulkDeleteRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Delete multiple traces by ID."""
+    valid_ids = [tid for tid in (_safe_uuid(tid) for tid in req.trace_ids) if tid]
+    if not valid_ids:
+        raise HTTPException(status_code=400, detail="No valid trace IDs provided")
+
+    query = select(Trace).where(Trace.id.in_(valid_ids))
+    result = await session.execute(query)
+    traces = list(result.scalars().all())
+
+    deleted = 0
+    for trace in traces:
+        await session.delete(trace)
+        deleted += 1
+
+    await session.flush()
+    return {"deleted": deleted, "requested": len(valid_ids)}
+
+
 # ── Import ────────────────────────────────────────────────────────────
 
 
@@ -410,26 +602,26 @@ class ImportSpanData(BaseModel):
     name: str
     span_type: str = "generic"
     start_time: float
-    end_time: Optional[float] = None
+    end_time: float | None = None
     status: str = "ok"
-    input: Optional[dict] = None
-    output: Optional[dict] = None
-    tokens_input: Optional[int] = None
-    tokens_output: Optional[int] = None
-    cost_usd: Optional[float] = None
-    metadata: Optional[dict] = None
-    attributes: Optional[dict] = None
+    input: dict | None = None
+    output: dict | None = None
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    cost_usd: float | None = None
+    metadata: dict | None = None
+    attributes: dict | None = None
 
 
 class ImportTraceData(BaseModel):
     """Trace data for import."""
 
     name: str
-    session_id: Optional[str] = None
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
+    session_id: str | None = None
+    start_time: float | None = None
+    end_time: float | None = None
     status: str = "ok"
-    metadata: Optional[dict] = None
+    metadata: dict | None = None
     spans: list[ImportSpanData] = []
 
 
@@ -460,8 +652,16 @@ async def import_traces(
     trace_ids = []
 
     for trace_data in import_data.traces:
-        start_dt = datetime.fromtimestamp(trace_data.start_time, tz=timezone.utc) if trace_data.start_time else datetime.now(timezone.utc)
-        end_dt = datetime.fromtimestamp(trace_data.end_time, tz=timezone.utc) if trace_data.end_time else None
+        start_dt = (
+            datetime.fromtimestamp(trace_data.start_time, tz=timezone.utc)
+            if trace_data.start_time
+            else datetime.now(timezone.utc)
+        )
+        end_dt = (
+            datetime.fromtimestamp(trace_data.end_time, tz=timezone.utc)
+            if trace_data.end_time
+            else None
+        )
 
         trace = Trace(
             id=str(uuid.uuid4()),
@@ -477,7 +677,11 @@ async def import_traces(
 
         for span_data in trace_data.spans:
             span_start = datetime.fromtimestamp(span_data.start_time, tz=timezone.utc)
-            span_end = datetime.fromtimestamp(span_data.end_time, tz=timezone.utc) if span_data.end_time else None
+            span_end = (
+                datetime.fromtimestamp(span_data.end_time, tz=timezone.utc)
+                if span_data.end_time
+                else None
+            )
             span = Span(
                 id=str(uuid.uuid4()),
                 trace_id=trace.id,

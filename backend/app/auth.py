@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import Depends, HTTPException, Security
+from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 # Read API key from environment. If not set, auth is disabled (dev mode).

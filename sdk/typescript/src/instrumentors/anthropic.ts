@@ -1,22 +1,19 @@
 /**
- * OpenAI auto-instrumentation
+ * Anthropic auto-instrumentation
  */
 
 import { getTracer, type Span } from "../tracer";
 import { calculateCost } from "../pricing";
 
-let originalSyncCreate: ((...args: unknown[]) => unknown) | null = null;
-let originalAsyncCreate: ((...args: unknown[]) => unknown) | null = null;
+let originalMessagesCreate: ((...args: unknown[]) => unknown) | null = null;
+let originalAsyncMessagesCreate: ((...args: unknown[]) => unknown) | null = null;
 
-function buildSpan(
-  model: string,
-  messages: unknown[]
-): Span {
+function buildSpan(model: string, messages: unknown[]): Span {
   const tracer = getTracer();
-  const span = tracer.startSpan("openai.chat.completions.create", {
+  const span = tracer.startSpan("anthropic.messages.create", {
     spanType: "llm",
     attributes: {
-      "gen_ai.system": "openai",
+      "gen_ai.system": "anthropic",
       "gen_ai.request.model": model,
       model,
       messages,
@@ -33,35 +30,34 @@ function finishSpan(span: Span, result: unknown, model: string): void {
     // Extract token usage
     const usage = obj.usage as Record<string, unknown> | undefined;
     if (usage) {
-      const inputTokens = (usage.prompt_tokens as number) || 0;
-      const outputTokens = (usage.completion_tokens as number) || 0;
+      const inputTokens = (usage.input_tokens as number) || 0;
+      const outputTokens = (usage.output_tokens as number) || 0;
       span.tokens = {
         input: inputTokens,
         output: outputTokens,
-        total: (usage.total_tokens as number) || 0,
+        total: inputTokens + outputTokens,
       };
 
-      // Calculate cost
       const cost = calculateCost(model, inputTokens, outputTokens);
       if (cost !== null) {
         span.costUsd = cost;
       }
     }
 
-    // Extract output
-    const choices = obj.choices as Array<Record<string, unknown>> | undefined;
-    if (choices && choices.length > 0) {
-      const choice = choices[0];
-      const message = choice.message as Record<string, unknown> | undefined;
-      if (message) {
-        span.output = {
-          content: message.content,
-          role: message.role,
-        };
-      }
+    // Extract output content
+    const content = obj.content as Array<Record<string, unknown>> | undefined;
+    if (content && content.length > 0) {
+      const textBlocks = content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text as string);
+      span.output = {
+        content: textBlocks.join("\n"),
+        stop_reason: obj.stop_reason,
+      };
     }
 
     span.attributes["response_id"] = obj.id;
+    span.attributes["model"] = obj.model;
     span.status = "ok";
   }
 
@@ -70,17 +66,15 @@ function finishSpan(span: Span, result: unknown, model: string): void {
 
 export function instrument(): void {
   try {
-    // Dynamic import to avoid hard dependency
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const openai = require("openai");
-    if (openai?.OpenAI) {
-      const OpenAI = openai.OpenAI;
+    const anthropic = require("anthropic");
+    if (anthropic?.Anthropic) {
+      const Anthropic = anthropic.Anthropic;
+      const proto = Anthropic.prototype;
 
-      // Patch the prototype so ALL instances are instrumented
-      const proto = OpenAI.prototype;
-      if (proto?.chat?.completions?.create) {
-        originalSyncCreate = proto.chat.completions.create;
-        proto.chat.completions.create = function (
+      if (proto?.messages?.create) {
+        originalMessagesCreate = proto.messages.create;
+        proto.messages.create = function (
           this: unknown,
           ...args: unknown[]
         ) {
@@ -91,7 +85,22 @@ export function instrument(): void {
           const span = buildSpan(model, messages);
 
           try {
-            const result = originalSyncCreate!.apply(this, args);
+            const result = originalMessagesCreate!.apply(this, args);
+            // Handle both sync and async
+            if (result && typeof (result as Promise<unknown>).then === "function") {
+              return (result as Promise<unknown>).then(
+                (resolved: unknown) => {
+                  finishSpan(span, resolved, model);
+                  return resolved;
+                },
+                (error: Error) => {
+                  span.status = "error";
+                  span.attributes["error.message"] = error.message;
+                  span.endTime = Date.now() / 1000;
+                  throw error;
+                }
+              );
+            }
             finishSpan(span, result, model);
             return result;
           } catch (error) {
@@ -105,11 +114,11 @@ export function instrument(): void {
       }
 
       // Patch async client if available
-      if (openai.AsyncOpenAI) {
-        const asyncProto = openai.AsyncOpenAI.prototype;
-        if (asyncProto?.chat?.completions?.create) {
-          originalAsyncCreate = asyncProto.chat.completions.create;
-          asyncProto.chat.completions.create = function (
+      if (anthropic.AsyncAnthropic) {
+        const asyncProto = anthropic.AsyncAnthropic.prototype;
+        if (asyncProto?.messages?.create) {
+          originalAsyncMessagesCreate = asyncProto.messages.create;
+          asyncProto.messages.create = function (
             this: object,
             ...args: unknown[]
           ) {
@@ -120,7 +129,7 @@ export function instrument(): void {
             const span = buildSpan(model, messages);
             const ctx = this;
 
-            return (originalAsyncCreate!.apply(ctx, args) as Promise<unknown>).then(
+            return (originalAsyncMessagesCreate!.apply(ctx, args) as Promise<unknown>).then(
               (result: unknown) => {
                 finishSpan(span, result, model);
                 return result;
@@ -137,23 +146,23 @@ export function instrument(): void {
       }
     }
   } catch {
-    // OpenAI not available, skip instrumentation
+    // Anthropic not available, skip instrumentation
   }
 }
 
 export function uninstrument(): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const openai = require("openai");
-    if (openai?.OpenAI && originalSyncCreate) {
-      openai.OpenAI.prototype.chat.completions.create = originalSyncCreate;
+    const anthropic = require("anthropic");
+    if (anthropic?.Anthropic && originalMessagesCreate) {
+      anthropic.Anthropic.prototype.messages.create = originalMessagesCreate;
     }
-    if (openai?.AsyncOpenAI && originalAsyncCreate) {
-      openai.AsyncOpenAI.prototype.chat.completions.create = originalAsyncCreate;
+    if (anthropic?.AsyncAnthropic && originalAsyncMessagesCreate) {
+      anthropic.AsyncAnthropic.prototype.messages.create = originalAsyncMessagesCreate;
     }
   } catch {
     // Ignore
   }
-  originalSyncCreate = null;
-  originalAsyncCreate = null;
+  originalMessagesCreate = null;
+  originalAsyncMessagesCreate = null;
 }

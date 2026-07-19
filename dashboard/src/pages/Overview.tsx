@@ -4,29 +4,17 @@ import {
   BarChart, Bar,
 } from 'recharts';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { api } from '../api';
+import type { SummaryData, TimelinePoint, CostByModel } from '../types';
+import { StatCard } from '../components/shared';
 
-interface SummaryData {
-  total_traces: number;
-  total_spans: number;
-  total_cost_usd: number;
-  avg_latency_ms: number;
-  error_count: number;
-  error_rate: number;
-  total_evaluations: number;
-  avg_evaluation_score: number | null;
-}
-
-interface TimelinePoint {
-  timestamp: string;
-  count: number;
-  cost_usd: number;
-}
-
-interface CostByModel {
-  model: string;
-  cost_usd: number;
-  span_count: number;
-}
+const TIME_RANGES = [
+  { label: '1h', hours: 1 },
+  { label: '6h', hours: 6 },
+  { label: '24h', hours: 24 },
+  { label: '7d', hours: 168 },
+  { label: '30d', hours: 720 },
+];
 
 function Overview() {
   const [summary, setSummary] = useState<SummaryData | null>(null);
@@ -34,25 +22,15 @@ function Overview() {
   const [costByModel, setCostByModel] = useState<CostByModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hours, setHours] = useState(168);
 
   const fetchData = useCallback(async () => {
     try {
-      const [summaryRes, timelineRes, costRes] = await Promise.all([
-        fetch('/api/v1/analytics/summary?hours=168'),
-        fetch('/api/v1/analytics/timeline?hours=168&interval_minutes=360'),
-        fetch('/api/v1/analytics/cost-by-model?hours=168'),
-      ]);
-
-      if (!summaryRes.ok || !timelineRes.ok || !costRes.ok) {
-        throw new Error('Failed to fetch analytics data');
-      }
-
       const [summaryData, timelineData, costData] = await Promise.all([
-        summaryRes.json(),
-        timelineRes.json(),
-        costRes.json(),
+        api.getSummary(hours),
+        api.getTimeline(hours, hours <= 6 ? 30 : hours <= 24 ? 60 : 360),
+        api.getCostByModel(hours),
       ]);
-
       setSummary(summaryData);
       setTimeline(timelineData);
       setCostByModel(costData);
@@ -61,13 +39,13 @@ function Overview() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hours]);
 
   useEffect(() => {
+    setLoading(true);
     fetchData();
   }, [fetchData]);
 
-  // Auto-refresh on new trace or evaluation events
   useWebSocket({
     onMessage: useCallback((msg: { type: string }) => {
       if (msg.type === 'new_trace' || msg.type === 'new_evaluation') {
@@ -91,7 +69,7 @@ function Overview() {
       <div className="px-4 py-6 sm:px-0">
         <div className="bg-red-900/20 border border-red-500 rounded-lg p-4">
           <p className="text-red-400">Error: {error}</p>
-          <p className="text-gray-500 text-sm mt-2">Make sure the backend is running on port 8000</p>
+          <p className="text-gray-500 text-sm mt-2">Make sure the backend is running</p>
         </div>
       </div>
     );
@@ -99,29 +77,32 @@ function Overview() {
 
   return (
     <div className="px-4 py-6 sm:px-0">
-      <h1 className="text-2xl font-bold mb-6">Dashboard Overview</h1>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Total Traces"
-          value={summary?.total_traces.toLocaleString() ?? '0'}
-        />
-        <StatCard
-          title="Total Spans"
-          value={summary?.total_spans.toLocaleString() ?? '0'}
-        />
-        <StatCard
-          title="Total Cost"
-          value={`$${(summary?.total_cost_usd ?? 0).toFixed(4)}`}
-        />
-        <StatCard
-          title="Avg Latency"
-          value={`${Math.round(summary?.avg_latency_ms ?? 0)}ms`}
-        />
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold">Dashboard Overview</h1>
+        <div className="flex gap-1">
+          {TIME_RANGES.map((r) => (
+            <button
+              key={r.hours}
+              onClick={() => setHours(r.hours)}
+              className={`px-3 py-1 rounded text-sm ${
+                hours === r.hours
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Error Rate */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard title="Total Traces" value={summary?.total_traces.toLocaleString() ?? '0'} />
+        <StatCard title="Total Spans" value={summary?.total_spans.toLocaleString() ?? '0'} />
+        <StatCard title="Total Cost" value={`$${(summary?.total_cost_usd ?? 0).toFixed(4)}`} />
+        <StatCard title="Avg Latency" value={`${Math.round(summary?.avg_latency_ms ?? 0)}ms`} />
+      </div>
+
       {summary && summary.error_count > 0 && (
         <div className="mt-4 bg-red-900/20 border border-red-500 rounded-lg p-4">
           <p className="text-red-400">
@@ -131,9 +112,16 @@ function Overview() {
         </div>
       )}
 
-      {/* Charts */}
+      {summary && summary.total_evaluations > 0 && (
+        <div className="mt-4 bg-gray-800 border border-gray-700 rounded-lg p-4">
+          <p className="text-gray-300">
+            {summary.total_evaluations} evaluation{summary.total_evaluations !== 1 ? 's' : ''}{' '}
+            &middot; avg score: {(summary.avg_evaluation_score ?? 0).toFixed(2)}
+          </p>
+        </div>
+      )}
+
       <div className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-2">
-        {/* Cost Over Time */}
         <div className="bg-gray-800 rounded-lg p-6">
           <h2 className="text-lg font-semibold mb-4">Cost Over Time</h2>
           {timeline.length > 0 ? (
@@ -165,7 +153,6 @@ function Overview() {
           )}
         </div>
 
-        {/* Cost by Model */}
         <div className="bg-gray-800 rounded-lg p-6">
           <h2 className="text-lg font-semibold mb-4">Cost by Model</h2>
           {costByModel.length > 0 ? (
@@ -189,15 +176,6 @@ function Overview() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="bg-gray-800 rounded-lg p-6">
-      <dt className="text-sm font-medium text-gray-400 truncate">{title}</dt>
-      <dd className="mt-1 text-3xl font-semibold text-white">{value}</dd>
     </div>
   );
 }

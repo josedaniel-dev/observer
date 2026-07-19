@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -12,9 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.evaluators import EvaluationCriteria, EvaluatorType, create_evaluator
 from app.models.evaluation import Evaluation
-from app.models.trace import Trace, Span
-from app.evaluators import create_evaluator, EvaluatorType, EvaluationCriteria
+from app.models.trace import Span, Trace
 from app.websocket import manager
 
 router = APIRouter()
@@ -33,11 +32,11 @@ class EvaluationCreate(BaseModel):
     """Schema for creating an evaluation."""
 
     trace_id: str
-    span_id: Optional[str] = None
+    span_id: str | None = None
     evaluator_type: str
-    score: Optional[float] = None
-    criteria: Optional[dict] = None
-    result: Optional[dict] = None
+    score: float | None = None
+    criteria: dict | None = None
+    result: dict | None = None
 
 
 class EvaluationRunRequest(BaseModel):
@@ -53,11 +52,11 @@ class EvaluationResponse(BaseModel):
 
     id: str
     trace_id: str
-    span_id: Optional[str]
+    span_id: str | None
     evaluator_type: str
-    score: Optional[float]
-    criteria: Optional[dict]
-    result: Optional[dict]
+    score: float | None
+    criteria: dict | None
+    result: dict | None
     created_at: datetime
 
 
@@ -145,7 +144,10 @@ async def run_evaluation(
     try:
         evaluator_type = EvaluatorType(run_request.evaluator_type)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid evaluator type: {run_request.evaluator_type}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid evaluator type: {run_request.evaluator_type}",
+        )
 
     evaluator = create_evaluator(evaluator_type)
 
@@ -195,12 +197,53 @@ async def run_evaluation(
     return evaluation
 
 
+@router.get("/summary")
+async def get_evaluations_summary(
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Get aggregated evaluation statistics."""
+    # By evaluator type
+    query = (
+        select(
+            Evaluation.evaluator_type,
+            func.count(Evaluation.id),
+            func.coalesce(func.avg(Evaluation.score), 0),
+        )
+        .group_by(Evaluation.evaluator_type)
+    )
+    result = await session.execute(query)
+    rows = result.all()
+
+    by_type = {}
+    for row in rows:
+        by_type[row[0]] = {
+            "count": row[1],
+            "avg_score": float(row[2]) if row[1] > 0 else None,
+        }
+
+    # Pass rate (score >= 0.8)
+    pass_query = select(func.count(Evaluation.id)).where(Evaluation.score >= 0.8)
+    pass_result = await session.execute(pass_query)
+    passed = pass_result.scalar() or 0
+
+    total_query = select(func.count(Evaluation.id))
+    total_result = await session.execute(total_query)
+    total = total_result.scalar() or 0
+
+    return {
+        "total": total,
+        "passed": passed,
+        "pass_rate": passed / total if total > 0 else 0,
+        "by_type": by_type,
+    }
+
+
 @router.get("/", response_model=EvaluationListResponse)
 async def list_evaluations(
-    trace_id: Optional[str] = Query(None),
-    evaluator_type: Optional[str] = Query(None),
-    min_score: Optional[float] = Query(None, ge=0, le=1),
-    max_score: Optional[float] = Query(None, ge=0, le=1),
+    trace_id: str | None = Query(None),
+    evaluator_type: str | None = Query(None),
+    min_score: float | None = Query(None, ge=0, le=1),
+    max_score: float | None = Query(None, ge=0, le=1),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),

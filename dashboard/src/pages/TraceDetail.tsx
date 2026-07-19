@@ -1,35 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { api } from '../api';
+import type { Trace, Span } from '../types';
 import TraceWaterfall from '../components/TraceWaterfall';
-
-interface Trace {
-  id: string;
-  name: string;
-  session_id: string | null;
-  start_time: string;
-  end_time: string | null;
-  status: string;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-}
-
-interface Span {
-  id: string;
-  trace_id: string;
-  parent_id: string | null;
-  name: string;
-  span_type: string;
-  start_time: string;
-  end_time: string | null;
-  status: string;
-  input: Record<string, unknown> | null;
-  output: Record<string, unknown> | null;
-  tokens_input: number | null;
-  tokens_output: number | null;
-  cost_usd: number | null;
-  metadata: Record<string, unknown> | null;
-  attributes: Record<string, unknown> | null;
-}
+import { StatusBadge, InfoCard, formatDuration } from '../components/shared';
 
 function TraceDetail() {
   const { traceId } = useParams<{ traceId: string }>();
@@ -42,22 +16,11 @@ function TraceDetail() {
   useEffect(() => {
     const fetchData = async () => {
       if (!traceId) return;
-
       try {
-        const [traceRes, spansRes] = await Promise.all([
-          fetch(`/api/v1/traces/${traceId}`),
-          fetch(`/api/v1/traces/${traceId}/spans`),
-        ]);
-
-        if (!traceRes.ok || !spansRes.ok) {
-          throw new Error('Failed to fetch trace data');
-        }
-
         const [traceData, spansData] = await Promise.all([
-          traceRes.json(),
-          spansRes.json(),
+          api.getTrace(traceId),
+          api.getTraceSpans(traceId),
         ]);
-
         setTrace(traceData);
         setSpans(spansData);
       } catch (err) {
@@ -66,7 +29,6 @@ function TraceDetail() {
         setLoading(false);
       }
     };
-
     fetchData();
   }, [traceId]);
 
@@ -93,16 +55,8 @@ function TraceDetail() {
     );
   }
 
-  const formatDuration = (start: string, end: string | null) => {
-    if (!end) return '-';
-    const ms = new Date(end).getTime() - new Date(start).getTime();
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
-  };
-
   return (
     <div className="px-4 py-6 sm:px-0">
-      {/* Header */}
       <div className="mb-6">
         <Link to="/traces" className="text-blue-400 hover:text-blue-300 text-sm">
           &larr; Back to traces
@@ -110,7 +64,6 @@ function TraceDetail() {
         <h1 className="text-2xl font-bold mt-2">{trace.name}</h1>
       </div>
 
-      {/* Trace Info */}
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-6">
         <InfoCard label="Status" value={trace.status} />
         <InfoCard label="Duration" value={formatDuration(trace.start_time, trace.end_time)} />
@@ -118,56 +71,52 @@ function TraceDetail() {
         <InfoCard label="Created" value={new Date(trace.created_at).toLocaleString()} />
       </div>
 
-      {/* Waterfall */}
+      {trace.session_id && (
+        <div className="mb-4 bg-gray-800 rounded-lg p-4">
+          <span className="text-sm text-gray-400">Session: </span>
+          <span className="text-sm text-white font-mono">{trace.session_id}</span>
+        </div>
+      )}
+
+      {trace.metadata && Object.keys(trace.metadata).length > 0 && (
+        <div className="mb-6 bg-gray-800 rounded-lg p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-2">Metadata</h3>
+          <pre className="bg-gray-900 rounded p-3 text-sm text-gray-300 overflow-x-auto">
+            {JSON.stringify(trace.metadata, null, 2)}
+          </pre>
+        </div>
+      )}
+
       <div className="mb-6">
         <TraceWaterfall traceId={traceId!} spans={spans} />
       </div>
 
-      {/* Spans Table */}
       <div className="bg-gray-800 rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-700">
           <h2 className="text-lg font-semibold">Spans</h2>
         </div>
         <table className="min-w-full divide-y divide-gray-700">
-          <thead className="bg-gray-750">
+          <thead className="bg-gray-700">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Name
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Type
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Duration
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Tokens
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Cost
-              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Name</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Type</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Duration</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Tokens</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Cost</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-700">
             {spans.map((span) => (
               <tr
                 key={span.id}
-                className={`hover:bg-gray-750 cursor-pointer ${
-                  selectedSpan?.id === span.id ? 'bg-gray-700' : ''
-                }`}
+                className={`hover:bg-gray-700 cursor-pointer ${selectedSpan?.id === span.id ? 'bg-gray-700' : ''}`}
                 onClick={() => setSelectedSpan(selectedSpan?.id === span.id ? null : span)}
               >
                 <td className="px-4 py-3 text-sm text-white">{span.name}</td>
                 <td className="px-4 py-3 text-sm text-gray-300">{span.span_type}</td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={span.status} />
-                </td>
-                <td className="px-4 py-3 text-sm text-gray-300">
-                  {formatDuration(span.start_time, span.end_time)}
-                </td>
+                <td className="px-4 py-3"><StatusBadge status={span.status} /></td>
+                <td className="px-4 py-3 text-sm text-gray-300">{formatDuration(span.start_time, span.end_time)}</td>
                 <td className="px-4 py-3 text-sm text-gray-300">
                   {span.tokens_input != null && span.tokens_output != null
                     ? `${span.tokens_input} → ${span.tokens_output}`
@@ -182,7 +131,6 @@ function TraceDetail() {
         </table>
       </div>
 
-      {/* Span Detail Panel */}
       {selectedSpan && (
         <div className="mt-6 bg-gray-800 rounded-lg p-4">
           <h3 className="text-lg font-semibold mb-4">Span Detail: {selectedSpan.name}</h3>
@@ -211,37 +159,6 @@ function TraceDetail() {
         </div>
       )}
     </div>
-  );
-}
-
-function InfoCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-gray-800 rounded-lg p-4">
-      <dt className="text-sm font-medium text-gray-400">{label}</dt>
-      <dd className="mt-1 text-xl font-semibold text-white">{value}</dd>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'ok') {
-    return (
-      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-        OK
-      </span>
-    );
-  }
-  if (status === 'error') {
-    return (
-      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-        ERROR
-      </span>
-    );
-  }
-  return (
-    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-      {status.toUpperCase()}
-    </span>
   );
 }
 

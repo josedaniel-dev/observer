@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
-from llm_observatory.tracer import Span, SpanStatus, _current_span, _get_global_tracer
 from llm_observatory.pricing import calculate_cost
+from llm_observatory.tracer import SpanStatus, _current_span, _get_global_tracer
 
 
 class LangChainInstrumentor:
@@ -26,20 +25,17 @@ class LangChainInstrumentor:
 
         try:
             from langchain_core.callbacks import BaseCallbackHandler
-            from langchain_core.outputs import LLMResult
-
-            # Store original methods
-            self._patched = True
-            self._original_on_llm_start = original_on_llm_start
-            self._original_on_llm_end = original_on_llm_end
-            self._original_on_llm_error = original_on_llm_error
 
             # Monkey-patch BaseCallbackHandler
             original_on_llm_start = BaseCallbackHandler.on_llm_start
             original_on_llm_end = BaseCallbackHandler.on_llm_end
             original_on_llm_error = BaseCallbackHandler.on_llm_error
 
-            instrumentor = self
+            # Store original methods
+            self._patched = True
+            self._original_on_llm_start = original_on_llm_start
+            self._original_on_llm_end = original_on_llm_end
+            self._original_on_llm_error = original_on_llm_error
 
             def patched_on_llm_start(
                 self_handler: Any,
@@ -51,7 +47,12 @@ class LangChainInstrumentor:
             ) -> Any:
                 """Patched on_llm_start that creates a span."""
                 tracer = _get_global_tracer()
-                model = serialized.get("name", serialized.get("id", ["unknown"])[-1] if isinstance(serialized.get("id"), list) else "unknown")
+                model_id = serialized.get("id", ["unknown"])
+                model = (
+                    serialized.get("name", model_id[-1])
+                    if isinstance(model_id, list)
+                    else "unknown"
+                )
 
                 span = tracer.start_span(
                     f"langchain.{model}",
@@ -60,7 +61,10 @@ class LangChainInstrumentor:
                     provider="langchain",
                 )
                 span.set_input({"prompts": prompts, "serialized": serialized})
-                return original_on_llm_start(self_handler, serialized, prompts, run_id=run_id, **kwargs)
+                return original_on_llm_start(
+                    self_handler, serialized, prompts,
+                    run_id=run_id, **kwargs,
+                )
 
             def patched_on_llm_end(
                 self_handler: Any,
@@ -76,8 +80,14 @@ class LangChainInstrumentor:
                     if hasattr(response, "llm_output") and response.llm_output:
                         token_usage = response.llm_output.get("token_usage", {})
                         if token_usage:
-                            input_tokens = token_usage.get("prompt_tokens", token_usage.get("input_tokens", 0))
-                            output_tokens = token_usage.get("completion_tokens", token_usage.get("output_tokens", 0))
+                            input_tokens = token_usage.get(
+                                "prompt_tokens",
+                                token_usage.get("input_tokens", 0),
+                            )
+                            output_tokens = token_usage.get(
+                                "completion_tokens",
+                                token_usage.get("output_tokens", 0),
+                            )
                             current.set_token_usage(input_tokens, output_tokens)
 
                             # Calculate cost

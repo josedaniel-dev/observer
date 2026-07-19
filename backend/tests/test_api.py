@@ -1,12 +1,12 @@
 """Tests for the backend API."""
 
 import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.db import get_session
 from app.main import app
 from app.models import Base
-from app.db import get_session
 
 
 @pytest.fixture
@@ -66,7 +66,10 @@ async def test_health_check(client):
     """Test health check endpoint."""
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["db"] == "ok"
+    assert data["version"] == "0.1.0"
 
 
 @pytest.mark.anyio
@@ -730,3 +733,289 @@ async def test_list_evaluations_score_filter(client):
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 2
+
+
+# ── Export Tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_export_traces(client):
+    """Test exporting traces with spans."""
+    # Create a trace with spans
+    create_response = await client.post("/v1/traces/", json={
+        "name": "export-test",
+        "start_time": 1700000000.0,
+        "end_time": 1700000001.0,
+        "status": "ok",
+        "spans": [
+            {
+                "name": "llm_call",
+                "span_type": "llm",
+                "start_time": 1700000000.0,
+                "end_time": 1700000000.5,
+                "status": "ok",
+                "tokens_input": 100,
+                "tokens_output": 50,
+                "cost_usd": 0.001,
+            },
+        ],
+    })
+    assert create_response.status_code == 200
+
+    response = await client.get("/v1/traces/export")
+    assert response.status_code == 200
+    data = response.json()
+    assert "traces" in data
+    assert data["total"] >= 1
+    exported = [t for t in data["traces"] if t["name"] == "export-test"]
+    assert len(exported) == 1
+    assert len(exported[0]["spans"]) == 1
+    assert exported[0]["spans"][0]["tokens_input"] == 100
+
+
+@pytest.mark.anyio
+async def test_export_traces_with_status_filter(client):
+    """Test export with status filter."""
+    await client.post("/v1/traces/", json={
+        "name": "ok-trace",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    await client.post("/v1/traces/", json={
+        "name": "error-trace",
+        "start_time": 1700000000.0,
+        "status": "error",
+    })
+
+    response = await client.get("/v1/traces/export?status=error")
+    assert response.status_code == 200
+    data = response.json()
+    assert all(t["status"] == "error" for t in data["traces"])
+    assert data["total"] == 1
+
+
+@pytest.mark.anyio
+async def test_export_traces_empty(client):
+    """Test export with no traces."""
+    response = await client.get("/v1/traces/export")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["traces"] == []
+    assert data["total"] == 0
+
+
+@pytest.mark.anyio
+async def test_export_import_roundtrip(client):
+    """Test export→import roundtrip preserves data."""
+    from datetime import datetime
+
+    # Create original trace
+    await client.post("/v1/traces/", json={
+        "name": "roundtrip",
+        "start_time": 1700000000.0,
+        "end_time": 1700000002.0,
+        "status": "ok",
+        "spans": [
+            {
+                "name": "span-a",
+                "span_type": "llm",
+                "start_time": 1700000000.0,
+                "end_time": 1700000001.0,
+                "status": "ok",
+                "tokens_input": 200,
+                "tokens_output": 100,
+            },
+        ],
+    })
+
+    # Export
+    export_resp = await client.get("/v1/traces/export")
+    export_data = export_resp.json()
+    assert export_data["total"] >= 1
+
+    # Convert export format (ISO datetime strings) to import format (timestamps)
+    import_traces = []
+    for t in export_data["traces"]:
+        start_ts = datetime.fromisoformat(
+            t["start_time"].replace("Z", "+00:00")
+        ).timestamp()
+        end_ts = (
+            datetime.fromisoformat(
+                t["end_time"].replace("Z", "+00:00")
+            ).timestamp()
+            if t["end_time"]
+            else None
+        )
+        import_spans = []
+        for s in t["spans"]:
+            s_start = datetime.fromisoformat(
+                s["start_time"].replace("Z", "+00:00")
+            ).timestamp()
+            s_end = (
+                datetime.fromisoformat(
+                    s["end_time"].replace("Z", "+00:00")
+                ).timestamp()
+                if s["end_time"]
+                else None
+            )
+            import_spans.append({
+                "name": s["name"],
+                "span_type": s["span_type"],
+                "start_time": s_start,
+                "end_time": s_end,
+                "status": s["status"],
+                "tokens_input": s.get("tokens_input"),
+                "tokens_output": s.get("tokens_output"),
+            })
+        import_traces.append({
+            "name": t["name"],
+            "start_time": start_ts,
+            "end_time": end_ts,
+            "status": t["status"],
+            "spans": import_spans,
+        })
+
+    # Import
+    import_resp = await client.post("/v1/traces/import", json={"traces": import_traces})
+    assert import_resp.status_code == 200
+    import_data = import_resp.json()
+    assert import_data["imported"] >= 1
+
+
+# ── New Endpoints (Phase 8) ──────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_trace_evaluations(client):
+    """Test GET /v1/traces/{id}/evaluations."""
+    # Create a trace
+    create_resp = await client.post("/v1/traces/", json={
+        "name": "eval-test",
+        "start_time": 1700000000.0,
+        "end_time": 1700000001.0,
+        "status": "ok",
+    })
+    trace_id = create_resp.json()["id"]
+
+    # Create evaluation for it
+    await client.post("/v1/evaluations/", json={
+        "trace_id": trace_id,
+        "evaluator_type": "rule_based",
+        "score": 0.85,
+        "criteria": {"latency": "pass"},
+    })
+
+    # Get evaluations for trace
+    resp = await client.get(f"/v1/traces/{trace_id}/evaluations")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["trace_id"] == trace_id
+    assert data[0]["score"] == 0.85
+
+
+@pytest.mark.anyio
+async def test_trace_evaluations_empty(client):
+    """Test GET /v1/traces/{id}/evaluations with no evaluations."""
+    create_resp = await client.post("/v1/traces/", json={
+        "name": "no-eval",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    trace_id = create_resp.json()["id"]
+    resp = await client.get(f"/v1/traces/{trace_id}/evaluations")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.anyio
+async def test_trace_evaluations_invalid_id(client):
+    """Test GET /v1/traces/{id}/evaluations with invalid ID."""
+    resp = await client.get("/v1/traces/not-a-uuid/evaluations")
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_bulk_delete_traces(client):
+    """Test POST /v1/traces/batch-delete."""
+    ids = []
+    for i in range(3):
+        r = await client.post("/v1/traces/", json={
+            "name": f"delete-me-{i}",
+            "start_time": 1700000000.0,
+            "status": "ok",
+        })
+        ids.append(r.json()["id"])
+
+    resp = await client.post("/v1/traces/batch-delete", json={"trace_ids": ids})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 3
+    assert data["requested"] == 3
+
+    # Verify they're gone
+    for tid in ids:
+        r = await client.get(f"/v1/traces/{tid}")
+        assert r.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_bulk_delete_partial(client):
+    """Test bulk delete with some invalid IDs."""
+    r = await client.post("/v1/traces/", json={
+        "name": "keep-me",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+    valid_id = r.json()["id"]
+
+    resp = await client.post("/v1/traces/batch-delete", json={
+        "trace_ids": [valid_id, "not-a-uuid", "00000000-0000-0000-0000-000000000000"],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 1
+
+
+@pytest.mark.anyio
+async def test_evaluations_summary(client):
+    """Test GET /v1/evaluations/summary."""
+    # Create some evaluations
+    await client.post("/v1/evaluations/", json={
+        "trace_id": "00000000-0000-0000-0000-000000000001",
+        "evaluator_type": "rule_based",
+        "score": 0.9,
+    })
+    await client.post("/v1/evaluations/", json={
+        "trace_id": "00000000-0000-0000-0000-000000000002",
+        "evaluator_type": "llm_judge",
+        "score": 0.7,
+    })
+
+    resp = await client.get("/v1/evaluations/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 2
+    assert "by_type" in data
+    assert "pass_rate" in data
+
+
+@pytest.mark.anyio
+async def test_list_sessions(client):
+    """Test GET /v1/analytics/sessions."""
+    # Create traces with session IDs
+    await client.post("/v1/traces/", json={
+        "name": "session-trace",
+        "session_id": "11111111-1111-1111-1111-111111111111",
+        "start_time": 1700000000.0,
+        "status": "ok",
+    })
+
+    resp = await client.get("/v1/analytics/sessions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    if data:
+        assert "session_id" in data[0]
+        assert "trace_count" in data[0]
+        assert "total_cost_usd" in data[0]

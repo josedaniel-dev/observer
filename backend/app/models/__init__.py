@@ -9,7 +9,7 @@ class Base(DeclarativeBase):
     pass
 
 
-from app.models.trace import Trace, Span
-from app.models.evaluation import Evaluation
+from app.models.evaluation import Evaluation  # noqa: E402
+from app.models.trace import Span, Trace  # noqa: E402
 
 __all__ = ["Base", "Trace", "Span", "Evaluation"]

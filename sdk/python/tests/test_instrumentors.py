@@ -1,10 +1,8 @@
 """Tests for Python SDK instrumentors and exporters."""
 
 from unittest.mock import MagicMock, patch
-import pytest
 
-from llm_observatory.tracer import Tracer, Span, SpanStatus, TokenUsage
-from llm_observatory.pricing import calculate_cost, get_model_pricing
+from llm_observatory.tracer import Tracer
 
 
 class TestInstrumentFunction:
@@ -12,26 +10,26 @@ class TestInstrumentFunction:
 
     def test_instrument_openai(self):
         """Test that instrument(openai=True) calls OpenAI instrumentor."""
-        with patch("llm_observatory.instrumentors.openai.OpenAIInstrumentor") as MockClass:
+        with patch("llm_observatory.instrumentors.openai.OpenAIInstrumentor") as mock_cls:
             mock_inst = MagicMock()
-            MockClass.return_value = mock_inst
+            mock_cls.return_value = mock_inst
 
             from llm_observatory.instrumentors import instrument
             instrument(openai=True)
 
-            MockClass.assert_called_once()
+            mock_cls.assert_called_once()
             mock_inst.instrument.assert_called_once()
 
     def test_instrument_anthropic(self):
         """Test that instrument(anthropic=True) calls Anthropic instrumentor."""
-        with patch("llm_observatory.instrumentors.anthropic.AnthropicInstrumentor") as MockClass:
+        with patch("llm_observatory.instrumentors.anthropic.AnthropicInstrumentor") as mock_cls:
             mock_inst = MagicMock()
-            MockClass.return_value = mock_inst
+            mock_cls.return_value = mock_inst
 
             from llm_observatory.instrumentors import instrument
             instrument(anthropic=True)
 
-            MockClass.assert_called_once()
+            mock_cls.assert_called_once()
             mock_inst.instrument.assert_called_once()
 
     def test_instrument_nothing(self):
@@ -42,12 +40,12 @@ class TestInstrumentFunction:
 
     def test_uninstrument(self):
         """Test uninstrument clears active instrumentors."""
-        from llm_observatory.instrumentors import instrument, uninstrument, _active_instrumentors
+        from llm_observatory.instrumentors import _active_instrumentors, instrument, uninstrument
         _active_instrumentors.clear()
 
-        with patch("llm_observatory.instrumentors.openai.OpenAIInstrumentor") as MockClass:
+        with patch("llm_observatory.instrumentors.openai.OpenAIInstrumentor") as mock_cls:
             mock_inst = MagicMock()
-            MockClass.return_value = mock_inst
+            mock_cls.return_value = mock_inst
 
             instrument(openai=True)
             assert len(_active_instrumentors) == 1
@@ -101,6 +99,7 @@ class TestOTLPExporter:
     def test_export_retries_on_failure(self):
         """Test that export retries on HTTP errors."""
         import httpx
+
         from llm_observatory.exporters.otlp import OTLPExporter
 
         exporter = OTLPExporter(endpoint="http://localhost:8000", max_retries=2)
@@ -109,7 +108,11 @@ class TestOTLPExporter:
             # First call fails, second succeeds
             mock_response = MagicMock()
             mock_response.raise_for_status.side_effect = [
-                httpx.HTTPStatusError("500", request=MagicMock(), response=MagicMock(status_code=500)),
+                httpx.HTTPStatusError(
+                    "500",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=500),
+                ),
                 None,
             ]
             mock_post.return_value = mock_response
@@ -177,3 +180,48 @@ class TestTracerWithExporter:
         assert span_dict["cost_usd"] == 0.001
         # Should be flat, not nested
         assert "tokens" not in span_dict or span_dict.get("tokens") is None
+
+
+class TestLangChainInstrumentor:
+    """Tests for LangChain instrumentor."""
+
+    def test_instrument_calls_patch(self):
+        """Test instrument() monkey-patches BaseCallbackHandler."""
+        from llm_observatory.instrumentors.langchain import LangChainInstrumentor
+
+        instrumentor = LangChainInstrumentor()
+        mock_handler_cls = MagicMock()
+        fake_lc = MagicMock()
+        mods = {"langchain_core": fake_lc, "langchain_core.callbacks": fake_lc.callbacks}
+        with patch.dict("sys.modules", mods):
+            import llm_observatory.instrumentors.langchain as mod
+            with patch.object(mod, "BaseCallbackHandler", mock_handler_cls, create=True):
+                instrumentor.instrument()
+                assert instrumentor._patched is True
+                assert mock_handler_cls.on_llm_start is not None
+
+    def test_uninstrument_restores(self):
+        """Test uninstrument() restores original methods."""
+        from llm_observatory.instrumentors.langchain import LangChainInstrumentor
+
+        instrumentor = LangChainInstrumentor()
+        mock_handler_cls = MagicMock()
+        fake_lc = MagicMock()
+        mods = {"langchain_core": fake_lc, "langchain_core.callbacks": fake_lc.callbacks}
+        with patch.dict("sys.modules", mods):
+            import llm_observatory.instrumentors.langchain as mod
+            with patch.object(mod, "BaseCallbackHandler", mock_handler_cls, create=True):
+                original_start = mock_handler_cls.on_llm_start
+                instrumentor.instrument()
+                instrumentor.uninstrument()
+                assert mock_handler_cls.on_llm_start is original_start
+
+    def test_noop_when_not_importable(self):
+        """Test instrument() is a no-op when langchain is not installed."""
+        with patch.dict("sys.modules", {"langchain_core": None, "langchain_core.callbacks": None}):
+            from llm_observatory.instrumentors.langchain import LangChainInstrumentor
+
+            instrumentor = LangChainInstrumentor()
+            # Should not raise
+            instrumentor.instrument()
+            assert instrumentor._patched is False

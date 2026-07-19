@@ -12,8 +12,11 @@ COPY . .
 # Build the application
 RUN npm run build
 
+# Install serve globally for production static file serving
+RUN npm install -g serve
+
 # Expose port
 EXPOSE 5173
 
-# Run the development server
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Serve the production build
+CMD ["serve", "dist", "-l", "5173"]

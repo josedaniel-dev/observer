@@ -106,6 +106,77 @@ def inspect(trace_id: str, db: str) -> None:
         console.print("[yellow]No spans found[/yellow]")
 
 
+@cli.command(name="import")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--db", type=click.Path(), default="observatory.db", help="SQLite database path")
+@click.option("--dry-run", is_flag=True, help="Preview without writing")
+def import_data(file: str, db: str, dry_run: bool) -> None:
+    """Import traces from a JSON export file."""
+    import json
+
+    from cli.db import get_connection
+
+    raw = json.loads(Path(file).read_text())
+    traces = raw.get("traces", [])
+
+    if not traces:
+        console.print("[yellow]No traces in file[/yellow]")
+        return
+
+    console.print(f"[blue]Importing {len(traces)} traces from {file}...[/blue]")
+
+    if dry_run:
+        for t in traces:
+            n = len(t.get("spans", []))
+            console.print(f"  {t.get('name', '?')} — {n} spans")
+        console.print("[yellow]Dry run, no changes written[/yellow]")
+        return
+
+    conn = get_connection(Path(db))
+    try:
+        imported = 0
+        for trace in traces:
+            conn.execute(
+                "INSERT OR IGNORE INTO traces (id, name, session_id, status, metadata, start_time, end_time, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    trace["id"],
+                    trace["name"],
+                    trace.get("session_id"),
+                    trace.get("status", "unset"),
+                    json.dumps(trace.get("metadata")),
+                    trace.get("start_time"),
+                    trace.get("end_time"),
+                    trace.get("created_at"),
+                ),
+            )
+            for span in trace.get("spans", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO spans (id, trace_id, parent_span_id, name, span_type, start_time, end_time, status, input, output, tokens_input, tokens_output, cost_usd, metadata, attributes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        span["id"],
+                        span.get("trace_id", trace["id"]),
+                        span.get("parent_span_id"),
+                        span["name"],
+                        span.get("span_type", "generic"),
+                        span.get("start_time"),
+                        span.get("end_time"),
+                        span.get("status", "unset"),
+                        json.dumps(span.get("input")) if span.get("input") else None,
+                        json.dumps(span.get("output")) if span.get("output") else None,
+                        span.get("tokens_input"),
+                        span.get("tokens_output"),
+                        span.get("cost_usd"),
+                        json.dumps(span.get("metadata")) if span.get("metadata") else None,
+                        json.dumps(span.get("attributes")) if span.get("attributes") else None,
+                    ),
+                )
+            imported += 1
+        conn.commit()
+        console.print(f"[green]Imported {imported} traces ({sum(len(t.get('spans', [])) for t in traces)} spans)[/green]")
+    finally:
+        conn.close()
+
+
 @cli.command()
 @click.option("--db", type=click.Path(exists=True), default="observatory.db", help="SQLite database path")
 def stats(db: str) -> None:
@@ -198,7 +269,6 @@ def serve(host: str, port: int, reload: bool, db: str) -> None:
         console.print("Install it with: pip install 'llm-observatory-backend[sqlite]'")
         return
 
-    import os
     os.environ["DATABASE_URL"] = db
 
     console.print(f"[green]Starting LLM Observatory server on {host}:{port}[/green]")

@@ -30,6 +30,11 @@ export interface Span {
   attributes: Record<string, unknown>;
 }
 
+export interface SpanExporter {
+  export(spans: Span[]): void;
+  flush?(): Promise<void>;
+}
+
 // Context propagation using AsyncLocalStorage
 const spanStorage = new AsyncLocalStorage<Span>();
 
@@ -39,18 +44,20 @@ export function getCurrentSpan(): Span | undefined {
 
 export class Tracer {
   private spans: Span[] = [];
+  private exporters: SpanExporter[] = [];
   private serviceName: string;
-  private endpoint?: string;
-  private apiKey?: string;
 
-  constructor(options: {
-    serviceName?: string;
-    endpoint?: string;
-    apiKey?: string;
-  } = {}) {
+  constructor(options: { serviceName?: string } = {}) {
     this.serviceName = options.serviceName || "llm-observatory";
-    this.endpoint = options.endpoint;
-    this.apiKey = options.apiKey;
+  }
+
+  addExporter(exporter: SpanExporter): void {
+    this.exporters.push(exporter);
+  }
+
+  removeExporter(exporter: SpanExporter): void {
+    const idx = this.exporters.indexOf(exporter);
+    if (idx >= 0) this.exporters.splice(idx, 1);
   }
 
   startTrace(name: string, attributes: Record<string, unknown> = {}): Span {
@@ -92,6 +99,27 @@ export class Tracer {
     return span;
   }
 
+  /** Called when a span ends - auto-exports to all registered exporters. */
+  private onSpanEnd(span: Span): void {
+    if (this.exporters.length > 0) {
+      for (const exporter of this.exporters) {
+        try {
+          exporter.export([span]);
+        } catch {
+          // Don't let exporter errors break tracing
+        }
+      }
+    }
+  }
+
+  /** Mark a span as ended and trigger export. */
+  endSpan(span: Span): void {
+    if (!span.endTime) {
+      span.endTime = Date.now() / 1000;
+    }
+    this.onSpanEnd(span);
+  }
+
   export(): Record<string, unknown>[] {
     return this.spans.map((span) => ({
       id: span.id,
@@ -110,6 +138,14 @@ export class Tracer {
       metadata: span.metadata,
       attributes: span.attributes,
     }));
+  }
+
+  async flush(): Promise<void> {
+    for (const exporter of this.exporters) {
+      if (exporter.flush) {
+        await exporter.flush();
+      }
+    }
   }
 
   clear(): void {
@@ -153,7 +189,7 @@ export function trace<T>(
       error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
-    span.endTime = Date.now() / 1000;
+    tracer.endSpan(span);
   }
 }
 
@@ -178,6 +214,6 @@ export async function asyncTrace<T>(
       error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
-    span.endTime = Date.now() / 1000;
+    tracer.endSpan(span);
   }
 }

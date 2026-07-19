@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # Copy application code
 COPY . .
 
+# Run database migrations
+RUN alembic upgrade head
+
 # Expose port
 EXPOSE 8000
 

@@ -1,9 +1,11 @@
 """Tests for the tracer module."""
 
-import pytest
 import asyncio
-from llm_observatory.tracer import Tracer, Span, SpanStatus, TokenUsage, trace
-from llm_observatory.pricing import calculate_cost, get_model_pricing, MODEL_PRICING
+
+import pytest
+
+from llm_observatory.pricing import MODEL_PRICING, calculate_cost, get_model_pricing
+from llm_observatory.tracer import Span, SpanStatus, Tracer, trace
 
 
 class TestSpan:

@@ -48,7 +48,7 @@ export class OTLPExporter {
   export(spans: Span[]): void {
     const dicts = spans.map(spanToDict);
     this.buffer.push(...dicts);
-    this.flush();
+    void this.flush();
   }
 
   async flush(): Promise<void> {

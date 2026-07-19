@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -18,7 +18,7 @@ class OTLPExporter(BaseExporter):
     def __init__(
         self,
         endpoint: str = "http://localhost:8000",
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         timeout: float = 10.0,
         max_retries: int = 3,
     ) -> None:
@@ -62,13 +62,21 @@ class OTLPExporter(BaseExporter):
                     f"HTTP {e.response.status_code} - {e.response.text}"
                 )
                 if attempt == self.max_retries - 1:
-                    logger.error(f"Export failed after {self.max_retries} attempts, dropping {len(spans)} spans")
+                    msg = (
+                        f"Export failed after {self.max_retries} attempts, "
+                        f"dropping {len(spans)} spans"
+                    )
+                    logger.error(msg)
             except httpx.HTTPError as e:
                 logger.warning(
                     f"Export failed (attempt {attempt + 1}/{self.max_retries}): {e}"
                 )
                 if attempt == self.max_retries - 1:
-                    logger.error(f"Export failed after {self.max_retries} attempts, dropping {len(spans)} spans")
+                    msg = (
+                        f"Export failed after {self.max_retries} attempts, "
+                        f"dropping {len(spans)} spans"
+                    )
+                    logger.error(msg)
 
     def flush(self) -> None:
         """Flush any buffered spans."""
