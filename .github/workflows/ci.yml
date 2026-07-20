@@ -104,3 +104,4 @@ jobs:
       - name: Dashboard build
         run: npm ci && npm run build
         working-directory: dashboard
+# ci retry
