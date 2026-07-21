@@ -146,6 +146,29 @@ Recommended first-use sequence:
 4. Confirm the runtime-correlation block and the metadata-only spans.
 5. Enable the real ManitOS exporter only after the smoke succeeds.
 
+## Durable delivery (phase 6)
+
+Set `MANITOS_OBSERVER_SPOOL_KEY` to enable the local durable queue. Envelopes that
+exhaust transient retries are stored in SQLite as AES-GCM ciphertext and retried after
+Observer recovers or ManitOS restarts. Idempotency identities are stored only as
+SHA-256 hashes. There is no plaintext persistence fallback.
+
+Optional controls include `MANITOS_OBSERVER_SPOOL_PATH`,
+`MANITOS_OBSERVER_SPOOL_MAX_ITEMS`, `MANITOS_OBSERVER_SPOOL_RETRY_SEC`,
+`MANITOS_OBSERVER_CIRCUIT_FAILURE_THRESHOLD`, and
+`MANITOS_OBSERVER_CIRCUIT_RECOVERY_SEC`. The circuit breaker diverts new envelopes to
+the spool while Observer is unavailable, keeping network failures out of the turn
+path. ManitOS `/readyz` exposes only metadata-only delivery status and counters.
+
+## Quality analytics (phase 7)
+
+`GET /v1/analytics/manitos-quality` accepts `hours`, `project_id`, and optional
+`environment` query parameters. It aggregates each signal once per turn and reports
+error, degraded, truncated, tool-error, TTS-error, and local-fallback rates; average turn latency
+and TTFT; plus model and language distributions. Empty windows return zero-valued
+metrics. The Overview dashboard renders the same metadata-only indicators for the
+`manitos` project.
+
 ## Database migration
 
 From `backend/`:

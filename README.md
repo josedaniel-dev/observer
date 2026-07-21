@@ -111,6 +111,7 @@ Base URL: `http://localhost:8000`
 | `GET`    | `/v1/analytics/timeline`          | Trace counts over time           |
 | `GET`    | `/v1/analytics/cost-by-model`     | Cost breakdown by model          |
 | `GET`    | `/v1/analytics/sessions`          | Unique sessions with stats       |
+| `GET`    | `/v1/analytics/manitos-quality`   | ManitOS quality and latency       |
 
 The ManitOS endpoint uses the versioned `manitos.telemetry.v1` envelope, accepts opaque
 ManitOS session identifiers, and safely deduplicates exporter retries. See
