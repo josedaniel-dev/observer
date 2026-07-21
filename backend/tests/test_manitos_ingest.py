@@ -244,3 +244,30 @@ async def test_analytics_filters_opaque_manitos_session_id(client):
     assert response.status_code == 200
     assert response.json()["total_traces"] == 1
     assert response.json()["total_spans"] == 2
+
+
+@pytest.mark.anyio
+async def test_trace_list_filters_manitos_correlation_fields(client):
+    first = _payload(key="correlation-first")
+    second = _payload(key="correlation-second")
+    second["project_id"] = "another-project"
+    second["environment"] = "staging"
+    second["service_instance_id"] = "desktop-test-02"
+    second["session_id"] = "session_other"
+    second["turn_id"] = "turn_000002"
+
+    assert (await client.post("/v1/ingest/manitos/traces", json=first)).status_code == 200
+    assert (await client.post("/v1/ingest/manitos/traces", json=second)).status_code == 200
+
+    cases = {
+        "project_id=manitos": first["trace"]["id"],
+        "environment=staging": second["trace"]["id"],
+        "service_instance_id=desktop-test-01": first["trace"]["id"],
+        f"session_id={second['session_id']}": second["trace"]["id"],
+        f"turn_id={first['turn_id']}": first["trace"]["id"],
+    }
+    for query, expected_trace_id in cases.items():
+        response = await client.get(f"/v1/traces/?{query}")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert response.json()["traces"][0]["id"] == expected_trace_id

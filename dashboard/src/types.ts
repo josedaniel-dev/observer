@@ -6,6 +6,11 @@ export interface Trace {
   id: string;
   name: string;
   session_id: string | null;
+  turn_id: string | null;
+  project_id: string | null;
+  environment: string | null;
+  service_instance_id: string | null;
+  schema_version: string;
   start_time: string;
   end_time: string | null;
   status: string;
