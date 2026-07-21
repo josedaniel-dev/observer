@@ -32,12 +32,20 @@ export const api = {
     offset?: number;
     status?: string;
     search?: string;
+    project_id?: string;
+    environment?: string;
+    session_id?: string;
+    service_instance_id?: string;
   } = {}): Promise<TraceListResponse> {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));
     if (params.offset) qs.set('offset', String(params.offset));
     if (params.status) qs.set('status', params.status);
     if (params.search) qs.set('search', params.search);
+    if (params.project_id) qs.set('project_id', params.project_id);
+    if (params.environment) qs.set('environment', params.environment);
+    if (params.session_id) qs.set('session_id', params.session_id);
+    if (params.service_instance_id) qs.set('service_instance_id', params.service_instance_id);
     const query = qs.toString();
     return request(`/v1/traces${query ? `?${query}` : ''}`);
   },

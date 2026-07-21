@@ -103,6 +103,49 @@ responses, tool arguments, credentials, artifacts, or raw actor identifiers. Whe
 `MANITOS_OBSERVER_ACTOR_HASH_KEY` is configured, the actor identifier is represented as
 a local HMAC-SHA256 digest; otherwise `actor_id_hash` is omitted.
 
+## Live contract verification (phase 4)
+
+After starting Observer and applying its migrations, verify the complete producer to
+storage to read-API path from the ManitOS checkout:
+
+```bash
+MANITOS_OBSERVER_ENABLED=1 \
+MANITOS_OBSERVER_URL=http://127.0.0.1:8000 \
+MANITOS_OBSERVER_PROJECT_ID=manitos-smoke \
+MANITOS_OBSERVER_ENVIRONMENT=integration \
+python scripts/check_observer_integration.py
+```
+
+The command uses the same bounded background exporter as a real turn. It sends one
+synthetic trace, flushes the delivery queue, reads the trace and spans back through
+Observer, and verifies schema version, project, environment, instance, session, turn,
+and metadata-only input/output fields. It exits non-zero on rejection, timeout,
+contract drift, missing spans, or content leakage. The JSON result contains correlation
+metadata and counters only; API keys and actor hashes are never printed.
+
+## Operator correlation (phase 5)
+
+The Observer trace list accepts exact filters for:
+
+- `project_id`
+- `environment`
+- `service_instance_id`
+- `session_id`
+- `turn_id`
+
+The dashboard exposes project, environment, and session filters and shows project and
+session correlation in the trace table. Trace detail shows project, environment,
+service instance, session, turn, and schema version. `actor_id_hash` remains available
+to authorized API consumers but is deliberately not rendered in the dashboard.
+
+Recommended first-use sequence:
+
+1. Apply `alembic upgrade head` and start Observer.
+2. Run the phase 4 live check with a dedicated smoke project/environment.
+3. Open **Traces** and filter by that project.
+4. Confirm the runtime-correlation block and the metadata-only spans.
+5. Enable the real ManitOS exporter only after the smoke succeeds.
+
 ## Database migration
 
 From `backend/`:

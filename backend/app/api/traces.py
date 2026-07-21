@@ -332,6 +332,8 @@ async def list_traces(
     session_id: str | None = Query(None),
     turn_id: str | None = Query(None),
     project_id: str | None = Query(None),
+    environment: str | None = Query(None),
+    service_instance_id: str | None = Query(None),
     status: str | None = Query(None),
     search: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -349,6 +351,12 @@ async def list_traces(
 
     if project_id:
         base_query = base_query.where(Trace.project_id == project_id)
+
+    if environment:
+        base_query = base_query.where(Trace.environment == environment)
+
+    if service_instance_id:
+        base_query = base_query.where(Trace.service_instance_id == service_instance_id)
 
     if status:
         base_query = base_query.where(Trace.status == status)

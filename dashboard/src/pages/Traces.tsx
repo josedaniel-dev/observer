@@ -13,6 +13,9 @@ function Traces() {
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [projectFilter, setProjectFilter] = useState('');
+  const [environmentFilter, setEnvironmentFilter] = useState('');
+  const [sessionFilter, setSessionFilter] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const limit = 20;
 
@@ -29,6 +32,9 @@ function Traces() {
         offset,
         status: statusFilter || undefined,
         search: debouncedSearch || undefined,
+        project_id: projectFilter.trim() || undefined,
+        environment: environmentFilter.trim() || undefined,
+        session_id: sessionFilter.trim() || undefined,
       });
       setTraces(data.traces);
       setTotal(data.total);
@@ -38,7 +44,7 @@ function Traces() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, debouncedSearch]);
+  }, [statusFilter, debouncedSearch, projectFilter, environmentFilter, sessionFilter]);
 
   useEffect(() => {
     setPage(0);
@@ -75,6 +81,30 @@ function Traces() {
             <option value="ok">OK</option>
             <option value="error">Error</option>
           </select>
+          <input
+            type="text"
+            aria-label="Project filter"
+            placeholder="Project (for example manitos)"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            className="bg-gray-700 text-white px-4 py-2 rounded-md min-w-[220px]"
+          />
+          <input
+            type="text"
+            aria-label="Environment filter"
+            placeholder="Environment"
+            value={environmentFilter}
+            onChange={(e) => setEnvironmentFilter(e.target.value)}
+            className="bg-gray-700 text-white px-4 py-2 rounded-md min-w-[160px]"
+          />
+          <input
+            type="text"
+            aria-label="Session filter"
+            placeholder="Session ID"
+            value={sessionFilter}
+            onChange={(e) => setSessionFilter(e.target.value)}
+            className="bg-gray-700 text-white px-4 py-2 rounded-md min-w-[220px]"
+          />
         </div>
       </div>
 
@@ -89,6 +119,8 @@ function Traces() {
             <thead className="bg-gray-700">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Project</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Session</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Duration</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Created</th>
@@ -96,14 +128,21 @@ function Traces() {
             </thead>
             <tbody className="divide-y divide-gray-700">
               {loading ? (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400">Loading...</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">Loading...</td></tr>
               ) : traces.length === 0 ? (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400">No traces found</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">No traces found</td></tr>
               ) : (
                 traces.map((trace) => (
                   <tr key={trace.id} className="hover:bg-gray-700">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-white">
                       <Link to={`/traces/${trace.id}`} className="hover:text-blue-400">{trace.name}</Link>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                      <div>{trace.project_id || '-'}</div>
+                      {trace.environment && <div className="text-xs text-gray-500">{trace.environment}</div>}
+                    </td>
+                    <td className="px-6 py-4 max-w-[240px] truncate text-sm text-gray-300 font-mono" title={trace.session_id || undefined}>
+                      {trace.session_id || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <StatusBadge status={trace.status} />

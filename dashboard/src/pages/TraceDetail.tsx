@@ -71,10 +71,24 @@ function TraceDetail() {
         <InfoCard label="Created" value={new Date(trace.created_at).toLocaleString()} />
       </div>
 
-      {trace.session_id && (
-        <div className="mb-4 bg-gray-800 rounded-lg p-4">
-          <span className="text-sm text-gray-400">Session: </span>
-          <span className="text-sm text-white font-mono">{trace.session_id}</span>
+      {(trace.project_id || trace.environment || trace.service_instance_id || trace.session_id || trace.turn_id) && (
+        <div className="mb-6 bg-gray-800 rounded-lg p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Runtime correlation</h3>
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              ['Project', trace.project_id],
+              ['Environment', trace.environment],
+              ['Service instance', trace.service_instance_id],
+              ['Session', trace.session_id],
+              ['Turn', trace.turn_id],
+              ['Schema', trace.schema_version],
+            ].filter(([, value]) => value).map(([label, value]) => (
+              <div key={label}>
+                <dt className="text-xs uppercase tracking-wide text-gray-500">{label}</dt>
+                <dd className="mt-1 break-all text-sm text-white font-mono">{value}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       )}
 
