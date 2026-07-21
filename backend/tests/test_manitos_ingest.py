@@ -271,3 +271,68 @@ async def test_trace_list_filters_manitos_correlation_fields(client):
         assert response.status_code == 200
         assert response.json()["total"] == 1
         assert response.json()["traces"][0]["id"] == expected_trace_id
+
+
+@pytest.mark.anyio
+async def test_manitos_quality_aggregates_metadata_by_turn(client):
+    payload = _payload(key="quality-summary")
+    payload["spans"] = [
+        {
+            "id": str(uuid.uuid4()),
+            "name": "manitos.turn.lifecycle",
+            "span_type": "turn",
+            "start_time": 1_750_000_000.0,
+            "end_time": 1_750_000_002.0,
+            "status": "ok",
+            "attributes": {
+                "duration_ms": 2000.0,
+                "ttft_ms": 125.0,
+                "model": "phi4-mini",
+                "llm_degraded": True,
+                "llm_truncated": False,
+                "tool_error": True,
+            },
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "tts.routing",
+            "span_type": "event",
+            "start_time": 1_750_000_001.0,
+            "end_time": 1_750_000_001.0,
+            "status": "ok",
+            "attributes": {"language": "en", "local_fallback": True},
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "tts.synthesis",
+            "span_type": "event",
+            "start_time": 1_750_000_001.1,
+            "end_time": 1_750_000_001.1,
+            "status": "ok",
+            "attributes": {"language": "en", "backend": "piper", "status": "error"},
+        },
+    ]
+    assert (await client.post("/v1/ingest/manitos/traces", json=payload)).status_code == 200
+
+    response = await client.get(
+        "/v1/analytics/manitos-quality?hours=720&project_id=manitos&environment=test"
+    )
+    assert response.status_code == 200
+    quality = response.json()
+    assert quality["total_turns"] == 1
+    assert quality["degraded_rate"] == 1.0
+    assert quality["truncated_rate"] == 0.0
+    assert quality["tool_error_rate"] == 1.0
+    assert quality["fallback_rate"] == 1.0
+    assert quality["tts_error_rate"] == 1.0
+    assert quality["avg_duration_ms"] == 2000.0
+    assert quality["avg_ttft_ms"] == 125.0
+    assert quality["models"] == [{"key": "phi4-mini", "count": 1, "rate": 1.0}]
+    assert quality["languages"] == [{"key": "en", "count": 1, "rate": 1.0}]
+
+    empty = await client.get(
+        "/v1/analytics/manitos-quality?hours=720&project_id=manitos&environment=production"
+    )
+    assert empty.status_code == 200
+    assert empty.json()["total_turns"] == 0
+    assert empty.json()["error_rate"] == 0.0

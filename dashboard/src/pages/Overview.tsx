@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api';
-import type { SummaryData, TimelinePoint, CostByModel } from '../types';
+import type { SummaryData, TimelinePoint, CostByModel, ManitOSQualitySummary } from '../types';
 import { StatCard } from '../components/shared';
 
 const TIME_RANGES = [
@@ -20,20 +20,23 @@ function Overview() {
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [costByModel, setCostByModel] = useState<CostByModel[]>([]);
+  const [quality, setQuality] = useState<ManitOSQualitySummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hours, setHours] = useState(168);
 
   const fetchData = useCallback(async () => {
     try {
-      const [summaryData, timelineData, costData] = await Promise.all([
+      const [summaryData, timelineData, costData, qualityData] = await Promise.all([
         api.getSummary(hours),
         api.getTimeline(hours, hours <= 6 ? 30 : hours <= 24 ? 60 : 360),
         api.getCostByModel(hours),
+        api.getManitOSQuality(hours),
       ]);
       setSummary(summaryData);
       setTimeline(timelineData);
       setCostByModel(costData);
+      setQuality(qualityData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -120,6 +123,49 @@ function Overview() {
           </p>
         </div>
       )}
+
+      <section className="mt-8" aria-labelledby="manitos-quality-heading">
+        <div className="flex items-baseline justify-between mb-4">
+          <h2 id="manitos-quality-heading" className="text-xl font-semibold">ManitOS Quality</h2>
+          <span className="text-sm text-gray-500">metadata only · project: manitos</span>
+        </div>
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard title="Turns" value={quality?.total_turns.toLocaleString() ?? '0'} />
+          <StatCard title="Error Rate" value={`${((quality?.error_rate ?? 0) * 100).toFixed(1)}%`} />
+          <StatCard title="Degraded Rate" value={`${((quality?.degraded_rate ?? 0) * 100).toFixed(1)}%`} />
+          <StatCard title="Fallback Rate" value={`${((quality?.fallback_rate ?? 0) * 100).toFixed(1)}%`} />
+          <StatCard title="Avg Turn Latency" value={`${Math.round(quality?.avg_duration_ms ?? 0)}ms`} />
+          <StatCard title="Avg TTFT" value={`${Math.round(quality?.avg_ttft_ms ?? 0)}ms`} />
+          <StatCard title="Truncated Rate" value={`${((quality?.truncated_rate ?? 0) * 100).toFixed(1)}%`} />
+          <StatCard title="Tool Error Rate" value={`${((quality?.tool_error_rate ?? 0) * 100).toFixed(1)}%`} />
+          <StatCard title="TTS Error Rate" value={`${((quality?.tts_error_rate ?? 0) * 100).toFixed(1)}%`} />
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {[
+            { title: 'Models', values: quality?.models ?? [] },
+            { title: 'Languages', values: quality?.languages ?? [] },
+          ].map((group) => (
+            <div key={group.title} className="bg-gray-800 rounded-lg p-6">
+              <h3 className="text-lg font-semibold mb-4">{group.title}</h3>
+              {group.values.length > 0 ? (
+                <div className="space-y-3">
+                  {group.values.map((item) => (
+                    <div key={item.key} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-200">{item.key}</span>
+                      <span className="text-gray-400">
+                        {item.count} turn{item.count === 1 ? '' : 's'} · {(item.rate * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-gray-500">No ManitOS data yet</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
 
       <div className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="bg-gray-800 rounded-lg p-6">

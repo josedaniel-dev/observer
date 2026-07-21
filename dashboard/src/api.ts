@@ -10,6 +10,7 @@ import type {
   SummaryData,
   TimelinePoint,
   CostByModel,
+  ManitOSQualitySummary,
 } from './types';
 
 const BASE_URL = '/api';
@@ -89,5 +90,10 @@ export const api = {
 
   async getCostByModel(hours = 168): Promise<CostByModel[]> {
     return request(`/v1/analytics/cost-by-model?hours=${hours}`);
+  },
+
+  async getManitOSQuality(hours = 168, projectId = 'manitos'): Promise<ManitOSQualitySummary> {
+    const qs = new URLSearchParams({ hours: String(hours), project_id: projectId });
+    return request(`/v1/analytics/manitos-quality?${qs.toString()}`);
   },
 };

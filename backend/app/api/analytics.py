@@ -45,6 +45,39 @@ class TraceTimeline(BaseModel):
     cost_usd: float
 
 
+class QualityBreakdown(BaseModel):
+    """Per-turn occurrence count for one bounded metadata value."""
+
+    key: str
+    count: int
+    rate: float
+
+
+class ManitOSQualitySummary(BaseModel):
+    """Metadata-only quality indicators emitted by ManitOS turns."""
+
+    project_id: str
+    environment: str | None
+    hours: int
+    total_turns: int
+    error_count: int
+    error_rate: float
+    degraded_count: int
+    degraded_rate: float
+    truncated_count: int
+    truncated_rate: float
+    tool_error_count: int
+    tool_error_rate: float
+    fallback_count: int
+    fallback_rate: float
+    tts_error_count: int
+    tts_error_rate: float
+    avg_duration_ms: float
+    avg_ttft_ms: float
+    models: list[QualityBreakdown]
+    languages: list[QualityBreakdown]
+
+
 @router.get("/summary", response_model=AnalyticsSummary)
 async def get_analytics_summary(
     session_id: str | None = Query(None),
@@ -183,6 +216,97 @@ async def get_trace_timeline(
         buckets[key]["cost_usd"] += cost_by_trace.get(trace.id, 0)
 
     return list(buckets.values())
+
+
+@router.get("/manitos-quality", response_model=ManitOSQualitySummary)
+async def get_manitos_quality(
+    hours: int = Query(24, ge=1, le=720),
+    project_id: str = Query("manitos", min_length=1, max_length=128),
+    environment: str | None = Query(None, min_length=1, max_length=64),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Aggregate bounded, metadata-only turn quality signals across SQL dialects."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    trace_query = select(Trace.id, Trace.status).where(
+        Trace.created_at >= cutoff, Trace.project_id == project_id
+    )
+    if environment:
+        trace_query = trace_query.where(Trace.environment == environment)
+    trace_rows = (await session.execute(trace_query)).all()
+    trace_ids = {str(row.id) for row in trace_rows}
+    total_turns = len(trace_ids)
+    error_count = sum(1 for row in trace_rows if row.status == "error")
+
+    degraded: set[str] = set()
+    truncated: set[str] = set()
+    tool_errors: set[str] = set()
+    fallbacks: set[str] = set()
+    tts_errors: set[str] = set()
+    durations: list[float] = []
+    ttfts: list[float] = []
+    models: dict[str, set[str]] = {}
+    languages: dict[str, set[str]] = {}
+
+    if trace_ids:
+        span_query = select(Span.trace_id, Span.name, Span.attributes).where(
+            Span.trace_id.in_(trace_ids)
+        )
+        span_rows = (await session.execute(span_query)).all()
+        for row in span_rows:
+            trace_id = str(row.trace_id)
+            attributes = row.attributes if isinstance(row.attributes, dict) else {}
+            if row.name == "manitos.turn.lifecycle":
+                if attributes.get("llm_degraded") is True:
+                    degraded.add(trace_id)
+                if attributes.get("llm_truncated") is True:
+                    truncated.add(trace_id)
+                if attributes.get("tool_error") is True:
+                    tool_errors.add(trace_id)
+                for key, target in (("duration_ms", durations), ("ttft_ms", ttfts)):
+                    value = attributes.get(key)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        target.append(float(value))
+            if attributes.get("local_fallback") is True:
+                fallbacks.add(trace_id)
+            if row.name == "tts.synthesis" and attributes.get("status") == "error":
+                tts_errors.add(trace_id)
+            for key, target in (("model", models), ("language", languages)):
+                value = str(attributes.get(key) or "").strip()[:160]
+                if value:
+                    target.setdefault(value, set()).add(trace_id)
+
+    def rate(count: int) -> float:
+        return count / total_turns if total_turns else 0.0
+
+    def breakdown(values: dict[str, set[str]]) -> list[dict]:
+        items = [
+            {"key": key, "count": len(ids), "rate": rate(len(ids))}
+            for key, ids in values.items()
+        ]
+        return sorted(items, key=lambda item: (-item["count"], item["key"]))
+
+    return {
+        "project_id": project_id,
+        "environment": environment,
+        "hours": hours,
+        "total_turns": total_turns,
+        "error_count": error_count,
+        "error_rate": rate(error_count),
+        "degraded_count": len(degraded),
+        "degraded_rate": rate(len(degraded)),
+        "truncated_count": len(truncated),
+        "truncated_rate": rate(len(truncated)),
+        "tool_error_count": len(tool_errors),
+        "tool_error_rate": rate(len(tool_errors)),
+        "fallback_count": len(fallbacks),
+        "fallback_rate": rate(len(fallbacks)),
+        "tts_error_count": len(tts_errors),
+        "tts_error_rate": rate(len(tts_errors)),
+        "avg_duration_ms": sum(durations) / len(durations) if durations else 0.0,
+        "avg_ttft_ms": sum(ttfts) / len(ttfts) if ttfts else 0.0,
+        "models": breakdown(models),
+        "languages": breakdown(languages),
+    }
 
 
 # ── Sessions ─────────────────────────────────────────────────────────

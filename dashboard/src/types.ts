@@ -70,6 +70,35 @@ export interface CostByModel {
   span_count: number;
 }
 
+export interface QualityBreakdown {
+  key: string;
+  count: number;
+  rate: number;
+}
+
+export interface ManitOSQualitySummary {
+  project_id: string;
+  environment: string | null;
+  hours: number;
+  total_turns: number;
+  error_count: number;
+  error_rate: number;
+  degraded_count: number;
+  degraded_rate: number;
+  truncated_count: number;
+  truncated_rate: number;
+  tool_error_count: number;
+  tool_error_rate: number;
+  fallback_count: number;
+  fallback_rate: number;
+  tts_error_count: number;
+  tts_error_rate: number;
+  avg_duration_ms: number;
+  avg_ttft_ms: number;
+  models: QualityBreakdown[];
+  languages: QualityBreakdown[];
+}
+
 export interface TraceListResponse {
   traces: Trace[];
   total: number;
