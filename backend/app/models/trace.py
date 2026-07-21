@@ -18,7 +18,16 @@ class Trace(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
-    session_id = Column(String(36), nullable=True, index=True)
+    # ManitOS session identifiers are stable opaque strings (for example
+    # ``session_20260720_...``), not UUIDs.  Keep trace/span IDs UUID-sized,
+    # but do not discard the source system's correlation identifiers.
+    session_id = Column(String(255), nullable=True, index=True)
+    turn_id = Column(String(128), nullable=True, index=True)
+    project_id = Column(String(128), nullable=True, index=True)
+    environment = Column(String(64), nullable=True)
+    service_instance_id = Column(String(128), nullable=True)
+    actor_id_hash = Column(String(128), nullable=True)
+    schema_version = Column(String(64), nullable=False, default="observer.trace.v1")
     start_time = Column(DateTime(timezone=True), nullable=False)
     end_time = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), nullable=False, default="unset")

@@ -64,12 +64,12 @@ class TraceCreate(BaseModel):
     @field_validator("session_id")
     @classmethod
     def validate_session_id(cls, v: str | None) -> str | None:
-        if v is not None:
-            try:
-                uuid.UUID(v)
-            except ValueError:
-                return None
-        return v
+        if v is None:
+            return None
+        normalized = v.strip()
+        if not normalized or len(normalized) > 255 or any(ord(char) < 32 for char in normalized):
+            raise ValueError("session_id must be 1-255 characters without control characters")
+        return normalized
 
 
 class BatchSpansCreate(BaseModel):
@@ -86,6 +86,12 @@ class TraceResponse(BaseModel):
     id: str
     name: str
     session_id: str | None
+    turn_id: str | None
+    project_id: str | None
+    environment: str | None
+    service_instance_id: str | None
+    actor_id_hash: str | None
+    schema_version: str
     start_time: datetime
     end_time: datetime | None
     status: str
@@ -100,6 +106,12 @@ class TraceResponse(BaseModel):
                 "id": values.id,
                 "name": values.name,
                 "session_id": values.session_id,
+                "turn_id": values.turn_id,
+                "project_id": values.project_id,
+                "environment": values.environment,
+                "service_instance_id": values.service_instance_id,
+                "actor_id_hash": values.actor_id_hash,
+                "schema_version": values.schema_version,
                 "start_time": values.start_time,
                 "end_time": values.end_time,
                 "status": values.status,
@@ -318,6 +330,8 @@ async def create_traces_batch(
 @router.get("/", response_model=TraceListResponse)
 async def list_traces(
     session_id: str | None = Query(None),
+    turn_id: str | None = Query(None),
+    project_id: str | None = Query(None),
     status: str | None = Query(None),
     search: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -328,9 +342,13 @@ async def list_traces(
     base_query = select(Trace)
 
     if session_id:
-        valid_sid = _safe_uuid(session_id)
-        if valid_sid:
-            base_query = base_query.where(Trace.session_id == valid_sid)
+        base_query = base_query.where(Trace.session_id == session_id)
+
+    if turn_id:
+        base_query = base_query.where(Trace.turn_id == turn_id)
+
+    if project_id:
+        base_query = base_query.where(Trace.project_id == project_id)
 
     if status:
         base_query = base_query.where(Trace.status == status)
@@ -380,6 +398,12 @@ class ExportTraceData(BaseModel):
 
     name: str
     session_id: str | None
+    turn_id: str | None
+    project_id: str | None
+    environment: str | None
+    service_instance_id: str | None
+    actor_id_hash: str | None
+    schema_version: str
     start_time: datetime
     end_time: datetime | None
     status: str
@@ -412,9 +436,7 @@ async def export_traces(
         base_query = base_query.where(Trace.status == status)
 
     if session_id:
-        valid_sid = _safe_uuid(session_id)
-        if valid_sid:
-            base_query = base_query.where(Trace.session_id == valid_sid)
+        base_query = base_query.where(Trace.session_id == session_id)
 
     count_query = select(func.count()).select_from(base_query.subquery())
     total = (await session.execute(count_query)).scalar() or 0
@@ -451,6 +473,12 @@ async def export_traces(
             ExportTraceData(
                 name=trace.name,
                 session_id=trace.session_id,
+                turn_id=trace.turn_id,
+                project_id=trace.project_id,
+                environment=trace.environment,
+                service_instance_id=trace.service_instance_id,
+                actor_id_hash=trace.actor_id_hash,
+                schema_version=trace.schema_version,
                 start_time=trace.start_time,
                 end_time=trace.end_time,
                 status=trace.status,
@@ -618,6 +646,12 @@ class ImportTraceData(BaseModel):
 
     name: str
     session_id: str | None = None
+    turn_id: str | None = None
+    project_id: str | None = None
+    environment: str | None = None
+    service_instance_id: str | None = None
+    actor_id_hash: str | None = None
+    schema_version: str = "observer.trace.v1"
     start_time: float | None = None
     end_time: float | None = None
     status: str = "ok"
@@ -667,10 +701,16 @@ async def import_traces(
             id=str(uuid.uuid4()),
             name=trace_data.name,
             session_id=trace_data.session_id,
+            turn_id=trace_data.turn_id,
+            project_id=trace_data.project_id,
+            environment=trace_data.environment,
+            service_instance_id=trace_data.service_instance_id,
+            actor_id_hash=trace_data.actor_id_hash,
+            schema_version=trace_data.schema_version,
             start_time=start_dt,
             end_time=end_dt,
             status=trace_data.status,
-            metadata=trace_data.metadata,
+            meta=trace_data.metadata,
         )
         session.add(trace)
         await session.flush()

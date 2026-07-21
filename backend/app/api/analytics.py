@@ -57,27 +57,33 @@ async def get_analytics_summary(
     # Total traces
     trace_query = select(func.count(Trace.id)).where(Trace.created_at >= cutoff)
     if session_id:
-        from uuid import UUID
-        trace_query = trace_query.where(Trace.session_id == UUID(session_id))
+        trace_query = trace_query.where(Trace.session_id == session_id)
     result = await session.execute(trace_query)
     total_traces = result.scalar() or 0
 
     # Total spans and cost
-    span_query = select(
-        func.count(Span.id),
-        func.coalesce(func.sum(Span.cost_usd), 0),
-        func.coalesce(func.avg(Span.end_time - Span.start_time), 0),
-    ).join(Trace, Span.trace_id == Trace.id).where(Trace.created_at >= cutoff)
+    span_query = select(Span.start_time, Span.end_time, Span.cost_usd).join(
+        Trace, Span.trace_id == Trace.id
+    ).where(Trace.created_at >= cutoff)
+    if session_id:
+        span_query = span_query.where(Trace.session_id == session_id)
     result = await session.execute(span_query)
-    span_data = result.one()
-    total_spans = span_data[0] or 0
-    total_cost_usd = float(span_data[1] or 0)
-    avg_latency_ms = float(span_data[2] or 0) * 1000
+    span_rows = result.all()
+    total_spans = len(span_rows)
+    total_cost_usd = sum(float(row.cost_usd or 0) for row in span_rows)
+    latencies_ms = [
+        (row.end_time - row.start_time).total_seconds() * 1000
+        for row in span_rows
+        if row.start_time is not None and row.end_time is not None
+    ]
+    avg_latency_ms = sum(latencies_ms) / len(latencies_ms) if latencies_ms else 0.0
 
     # Error count
     error_query = select(func.count(Trace.id)).where(
         Trace.created_at >= cutoff, Trace.status == "error"
     )
+    if session_id:
+        error_query = error_query.where(Trace.session_id == session_id)
     result = await session.execute(error_query)
     error_count = result.scalar() or 0
 
@@ -86,6 +92,8 @@ async def get_analytics_summary(
         func.count(Evaluation.id),
         func.coalesce(func.avg(Evaluation.score), 0),
     ).join(Trace, Evaluation.trace_id == Trace.id).where(Trace.created_at >= cutoff)
+    if session_id:
+        eval_query = eval_query.where(Trace.session_id == session_id)
     result = await session.execute(eval_query)
     eval_data = result.one()
     total_evaluations = eval_data[0] or 0
@@ -111,32 +119,24 @@ async def get_cost_by_model(
     """Get cost breakdown by model (from span attributes)."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # Use json_extract for cross-dialect compatibility (SQLite + PostgreSQL)
-    model_col = func.json_extract(Span.attributes, "$.model").label("model")
-
-    query = (
-        select(
-            model_col,
-            func.sum(Span.cost_usd).label("cost_usd"),
-            func.count(Span.id).label("span_count"),
-        )
-        .join(Trace, Span.trace_id == Trace.id)
-        .where(Trace.created_at >= cutoff)
-        .where(Span.attributes["model"].isnot(None))
-        .group_by(model_col)
-        .order_by(func.sum(Span.cost_usd).desc())
-    )
+    # SQLAlchemy JSON extraction differs between SQLite and PostgreSQL.
+    # Aggregate this bounded time-window result in Python for identical
+    # semantics on both supported databases.
+    query = select(Span.attributes, Span.cost_usd).join(
+        Trace, Span.trace_id == Trace.id
+    ).where(Trace.created_at >= cutoff)
     result = await session.execute(query)
     rows = result.all()
-
-    return [
-        {
-            "model": row.model or "unknown",
-            "cost_usd": float(row.cost_usd or 0),
-            "span_count": row.span_count,
-        }
-        for row in rows
-    ]
+    by_model: dict[str, dict[str, str | float | int]] = {}
+    for row in rows:
+        attributes = row.attributes if isinstance(row.attributes, dict) else {}
+        model = str(attributes.get("model") or "").strip()
+        if not model:
+            continue
+        bucket = by_model.setdefault(model, {"model": model, "cost_usd": 0.0, "span_count": 0})
+        bucket["cost_usd"] = float(bucket["cost_usd"]) + float(row.cost_usd or 0)
+        bucket["span_count"] = int(bucket["span_count"]) + 1
+    return sorted(by_model.values(), key=lambda item: float(item["cost_usd"]), reverse=True)
 
 
 @router.get("/timeline", response_model=list[TraceTimeline])

@@ -97,6 +97,7 @@ Base URL: `http://localhost:8000`
 |----------|-----------------------------------|----------------------------------|
 | `GET`    | `/health`                         | Health check (db status, version)|
 | `POST`   | `/v1/traces/batch`                | Ingest traces                    |
+| `POST`   | `/v1/ingest/manitos/traces`       | Idempotent ManitOS turn ingestion|
 | `GET`    | `/v1/traces`                      | List traces (paginated)          |
 | `GET`    | `/v1/traces/{id}`                 | Get trace detail                 |
 | `DELETE` | `/v1/traces/{id}`                 | Delete trace                     |
@@ -110,6 +111,10 @@ Base URL: `http://localhost:8000`
 | `GET`    | `/v1/analytics/timeline`          | Trace counts over time           |
 | `GET`    | `/v1/analytics/cost-by-model`     | Cost breakdown by model          |
 | `GET`    | `/v1/analytics/sessions`          | Unique sessions with stats       |
+
+The ManitOS endpoint uses the versioned `manitos.telemetry.v1` envelope, accepts opaque
+ManitOS session identifiers, and safely deduplicates exporter retries. See
+[docs/manitos-integration.md](docs/manitos-integration.md) for its contract and limits.
 
 ### Example: Ingest a trace
 
@@ -253,7 +258,7 @@ export OBSERVATORY_JUDGE_MODEL=gpt-4o  # default
 ### Run tests
 
 ```bash
-# Backend (44 API + 50 rubric tests)
+# Backend (106 tests)
 cd backend && pytest
 
 # Python SDK (37 tests)

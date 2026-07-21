@@ -20,8 +20,8 @@ if DATABASE_URL.startswith("sqlite"):
     engine = create_async_engine(
         DATABASE_URL,
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 5.0},
     )
 else:
     # PostgreSQL settings
-    engine = create_async_engine(DATABASE_URL, echo=False)
+    engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)

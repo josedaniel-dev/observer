@@ -2,82 +2,130 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, manitOS-observer]
   pull_request:
-    branches: [main]
+    branches: [main, manitOS-observer]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── Python ──────────────────────────────────────────────────────────
-
-  python-lint:
+  python-quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install ruff
-      - run: ruff check backend/ cli/ sdk/python/
+          cache: pip
+      - run: python -m pip install ruff
+      - run: ruff check backend cli sdk/python
 
   python-test:
     runs-on: ubuntu-latest
-    needs: python-lint
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install backend deps
-        run: pip install -e "backend/[sqlite]"
-        working-directory: .
-      - name: Install CLI
-        run: pip install -e cli/
-        working-directory: .
-      - name: Install SDK
-        run: pip install -e sdk/python/
-        working-directory: .
+          cache: pip
+      - name: Install packages
+        run: >-
+          python -m pip install
+          -e "./backend[dev,sqlite]"
+          -e "./sdk/python[dev]"
+          -e ./cli
       - name: Backend tests
-        run: pytest -x -q --tb=short
+        run: python -m pytest tests -q
         working-directory: backend
-      - name: CLI tests
-        run: pytest -x -q --tb=short
-        working-directory: cli
-      - name: SDK tests
-        run: pytest -x -q --tb=short
+      - name: Python SDK tests
+        run: python -m pytest tests -q
         working-directory: sdk/python
+      - name: CLI tests
+        run: python -m pytest tests -q
+        working-directory: cli
 
-  # ── TypeScript ───────────────────────────────────────────────────────
-
-  typescript-typecheck:
+  sqlite-migrations:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[sqlite]"
+        working-directory: backend
+      - name: Upgrade, downgrade, and re-upgrade
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./migration-smoke.db
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+  postgres-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: observatory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d observatory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e .
+        working-directory: backend
+      - name: Upgrade, downgrade, and re-upgrade
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/observatory_test
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+  typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: SDK typecheck
-        run: npm ci && npx tsc --noEmit
+          cache: npm
+          cache-dependency-path: |
+            sdk/typescript/package-lock.json
+            dashboard/package-lock.json
+      - name: SDK typecheck and tests
         working-directory: sdk/typescript
-      - name: Dashboard typecheck
-        run: npm ci && npx tsc --noEmit
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm run test:run
+      - name: Dashboard typecheck and build
         working-directory: dashboard
-
-  typescript-test:
-    runs-on: ubuntu-latest
-    needs: typescript-typecheck
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: SDK tests
-        run: npm ci && npm run test:run
-        working-directory: sdk/typescript
-      - name: Dashboard build
-        run: npm ci && npm run build
-        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
