@@ -77,6 +77,32 @@ must not be sent unless the user explicitly enables content capture and the payl
 passed local redaction. `actor_id_hash` is intended for a locally generated keyed hash,
 not a raw user identifier.
 
+## ManitOS exporter (phases 2-3)
+
+ManitOS now includes an opt-in background exporter for this contract. Enable it in
+the ManitOS process with:
+
+```bash
+MANITOS_OBSERVER_ENABLED=1
+MANITOS_OBSERVER_URL=http://127.0.0.1:8000
+MANITOS_OBSERVER_API_KEY=
+MANITOS_OBSERVER_PROJECT_ID=manitos
+MANITOS_OBSERVER_ENVIRONMENT=development
+MANITOS_OBSERVER_INSTANCE_ID=desktop-01
+MANITOS_OBSERVER_ACTOR_HASH_KEY=<local-secret>
+```
+
+The exporter is disabled by default. It emits one trace per completed or failed turn,
+uses a bounded in-memory queue, retries only transient HTTP/network failures, and
+flushes during adapter shutdown. Queue saturation or Observer unavailability never
+blocks or fails the conversation path.
+
+The current producer is intentionally metadata-only. It records safe routing,
+language, continuation, latency, and status attributes, but does not serialize prompts,
+responses, tool arguments, credentials, artifacts, or raw actor identifiers. When
+`MANITOS_OBSERVER_ACTOR_HASH_KEY` is configured, the actor identifier is represented as
+a local HMAC-SHA256 digest; otherwise `actor_id_hash` is omitted.
+
 ## Database migration
 
 From `backend/`:
